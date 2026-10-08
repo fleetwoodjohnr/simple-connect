@@ -1,0 +1,14 @@
+Port 22
+HostKey /etc/ssh/ssh_host_ed25519_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
+PasswordAuthentication yes
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+AuthorizedKeysFile .ssh/authorized_keys
+AllowTcpForwarding yes
+GatewayPorts no
+Subsystem sftp internal-sftp
+LoginGraceTime 120
+Match User kbd
+    PasswordAuthentication no
+    KbdInteractiveAuthentication yes

@@ -1,0 +1,91 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Simple Connect",
+  "mainBinaryName": "simple-connect",
+  "identifier": "dev.simpleconnect.client",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Simple Connect",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 560,
+        "dragDropEnabled": true
+      }
+    ],
+    "security": {
+      "freezePrototype": false,
+      "csp": {
+        "default-src": "'self'",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' data:",
+        "font-src": "'self'",
+        "connect-src": "ipc: http://ipc.localhost",
+        "object-src": "'none'",
+        "base-uri": "'none'",
+        "form-action": "'none'",
+        "frame-src": "'none'"
+      },
+      "devCsp": {
+        "default-src": "'self'",
+        "script-src": "'self' 'unsafe-inline'",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' data:",
+        "font-src": "'self'",
+        "connect-src": "ipc: http://ipc.localhost ws://localhost:1420",
+        "object-src": "'none'",
+        "base-uri": "'none'",
+        "frame-src": "'none'"
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "deb",
+      "rpm",
+      "appimage"
+    ],
+    "category": "DeveloperTool",
+    "shortDescription": "Secure SSH terminal and SFTP client",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "linux": {
+      "deb": {
+        "depends": [
+          "openssh-client"
+        ]
+      },
+      "rpm": {
+        "depends": [
+          "openssh-clients"
+        ]
+      }
+    },
+    "copyright": "Simple Connect contributors",
+    "longDescription": "A secure SSH terminal and SFTP client built on the system's OpenSSH, with host-key verification, encrypted credential storage, tunnels and jump hosts."
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "REPLACE-WITH-THE-RELEASE-MINISIGN-PUBLIC-KEY (see BUILDING.md). Until then every update is rejected.",
+      "endpoints": [
+        "https://updates.simpleconnect.invalid/{{target}}/{{arch}}/{{current_version}}"
+      ]
+    }
+  }
+}

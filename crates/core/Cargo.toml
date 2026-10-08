@@ -1,0 +1,58 @@
+[package]
+name = "simple-connect-core"
+description = "Security-critical core of Simple Connect: validation, OpenSSH orchestration, SFTP, secrets."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+regex = "1"
+dirs = "6"
+rusqlite = { version = "0.40", features = ["bundled"] }
+uuid = { version = "1", features = ["v4"] }
+tokio = { version = "1", features = ["process", "io-util", "net", "sync", "time", "rt", "macros", "fs"] }
+portable-pty = "0.9"
+base64 = "0.22"
+sha2 = "0.10"
+secrecy = "0.10"
+zeroize = "1"
+getrandom = "0.3"
+argon2 = { version = "0.5", features = ["std"] }
+chacha20poly1305 = "0.10"
+keyring-core = "1"
+openssh-sftp-client = "0.15"
+futures-util = "0.3"
+bytes = "1"
+trash = "5"
+if-addrs = "0.15"
+dns-lookup = "4"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "net", "sync", "time"] }
+
+[lints]
+workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process", "fs"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Pure-Rust D-Bus: no libdbus build dependency.
+zbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
+zbus = "5"
+
+# Stand-in for the app binary in integration tests: ssh re-executes it as
+# askpass / KnownHostsCommand, and it forwards to the test's helper server.
+[[bin]]
+name = "sc-test-helper"
+path = "tests/support/helper_bin.rs"
+test = false
+doc = false
