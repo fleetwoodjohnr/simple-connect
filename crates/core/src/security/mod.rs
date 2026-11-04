@@ -35,6 +35,12 @@ pub fn new_password_ref() -> String {
     format!("password:{}", uuid::Uuid::new_v4())
 }
 
+/// Ids of a profile's remote desktop passwords: a VNC password and an account
+/// password (RDP, macOS) differ, so each kind is kept apart under the profile's reference.
+pub fn desktop_secret_id(base: &str, account: bool) -> String {
+    format!("{base}:{}", if account { "account" } else { "vnc" })
+}
+
 /// Id for a key file's saved passphrase (deterministic per path, no lookup table).
 pub fn passphrase_ref(key_path: &std::path::Path) -> String {
     use sha2::{Digest, Sha256};

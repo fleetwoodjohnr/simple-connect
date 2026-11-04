@@ -2,9 +2,10 @@
 
 ## Scope and assets
 
-**Assets:** SSH private keys and passphrases, saved passwords, vault master password,
-trusted host keys, connection inventory (hostnames, usernames), the contents of remote
-and local files, terminal I/O, and the integrity of the application binary.
+**Assets:** SSH private keys and passphrases, saved passwords (SSH and remote desktop),
+vault master password, trusted host keys, connection inventory (hostnames, usernames),
+the contents of remote and local files, terminal I/O, remote desktop screens and input,
+and the integrity of the application binary.
 
 **Trust boundaries:**
 1. The network and remote servers. These are untrusted until host-key verification
@@ -299,6 +300,71 @@ binary; hardware attacks.
 - **Residual risk:** Network monitoring may still flag a sweep of the local subnet.
   Names come from reverse DNS/mDNS and can be spoofed by devices on the LAN, so the
   host-key check, not the name, is what identifies a server.
+
+### T18. Malicious remote desktop server
+- **Attack path:** A connected computer (or a program on it running a fake VNC/RDP
+  server on its loopback) sends crafted protocol data, pixels, cursors or clipboard
+  text, asks for credentials, or tries to steer the client to weaker security.
+- **Impact:** Memory corruption in the client, credential phishing, clipboard
+  poisoning, or a downgraded session.
+- **Mitigation:**
+  - RDP is parsed and decoded in Rust (IronRDP). The webview receives only bounded
+    rectangles of RGBA pixels, cursors up to 256×256 and text clipboard data up to
+    1 MB. VNC security handshakes (VNC password, Apple Remote Desktop) are done in Rust
+    with bounded reads; the rest is parsed by noVNC in the sandboxed webview.
+  - Only TLS and NLA are offered for RDP; the legacy RC4 RDP security is refused,
+    including when a server selects it. Unsupported VNC security types are refused,
+    never improvised. The negotiation runs inside SSH, so it can't be downgraded on
+    the network.
+  - Password prompts use Simple Connect's own text, never the server's. Saved or
+    reused passwords are tried once; after a failure the user is asked.
+  - No audio, drive, printer or smart-card channels are offered. The clipboard is
+    text only, and remote clipboard text reaches the local clipboard only by explicit
+    action unless the user turns on automatic sharing (off by default).
+- **Residual risk:** A server can still show misleading pixels, including fake
+  dialogs. With automatic clipboard sharing on, a server can place text on the local
+  clipboard. Bugs in IronRDP or noVNC are part of the attack surface.
+
+### T19. Screen sharing and remote desktop services exposed
+- **Attack path:** Starting a desktop server, or turning on Remote Desktop, exposes
+  the desktop to the network, to other local users of that computer, or keeps it
+  shared after the user is done.
+- **Impact:** Someone else sees or controls the desktop.
+- **Mitigation:**
+  - All traffic goes through `ssh -W` over the verified SSH connection, to the remote
+    loopback or to a Unix socket. Nothing listens on a local port.
+  - Servers Simple Connect starts (x0vncserver, wayvnc, Xvnc) listen only on a
+    0600 Unix socket in a 0700 directory in the user's home, with no TCP port, so only
+    that account can connect. Screen shares are tied to the SSH channel and stop when
+    it closes; virtual desktops end when the user signs out of them.
+  - Launch scripts are fixed text; the only values passed are validated numbers and
+    names, and the socket path they report is checked before use.
+  - Setup steps run only after a confirmation showing the exact commands, in a
+    visible terminal, with sudo asking as usual. Turning on Windows Remote Desktop
+    leaves the firewall closed. The documentation recommends keeping RDP ports
+    firewalled where a server (GNOME) listens on all interfaces.
+- **Residual risk:** Services the user turns on themselves (GNOME Remote Desktop,
+  Windows Remote Desktop, macOS Screen Sharing) listen according to their own
+  settings; Simple Connect can't restrict them. A virtual desktop keeps running, with
+  lingering enabled, until the user signs out of it.
+
+### T20. Remote desktop credentials
+- **Attack path:** Desktop passwords are stored insecurely, sent to the wrong
+  computer, or the SSH password is reused where it shouldn't be.
+- **Impact:** Credential disclosure or account compromise.
+- **Mitigation:**
+  - Desktop passwords live in the same credential store as SSH passwords, apart
+    per kind (VNC password, account password), are saved only after they worked,
+    are deleted with the profile, and never cross IPC to the webview.
+  - The SSH password is reused only for an account of the same name, only when reuse
+    is enabled, and only towards the remote computer's own loopback through the same
+    verified SSH connection, which already received it.
+  - RDP certificates aren't checked against a CA (the identity comes from SSH), but
+    the TLS handshake proves possession of the certificate's key and CredSSP binds the
+    credentials to it. TLS keys are never logged (`SSLKEYLOGFILE` is ignored).
+  - Kerberos is not used, so no credentials are sent to a KDC.
+- **Residual risk:** The RDP password is held in memory as a plain string by IronRDP
+  for the duration of sign-in. Same-user malware is out of scope.
 
 ## Design consequences
 

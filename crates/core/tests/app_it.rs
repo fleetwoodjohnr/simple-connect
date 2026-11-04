@@ -145,7 +145,7 @@ async fn full_session_lifecycle() {
     // Terminal, starting in the profile's folder.
     let out: Arc<Mutex<Vec<u8>>> = Arc::default();
     let sink = out.clone();
-    let term = m.open_terminal(&sid, 100, 30, move |b| sink.lock().unwrap().extend(b)).unwrap();
+    let term = m.open_terminal(&sid, 100, 30, None, move |b| sink.lock().unwrap().extend(b)).unwrap();
     m.terminal(&sid, &term).unwrap().write(b"echo cwd=$(pwd)\n").unwrap();
     for _ in 0..50 {
         if String::from_utf8_lossy(&out.lock().unwrap()).contains("cwd=/tmp") {

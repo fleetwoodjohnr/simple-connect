@@ -27,6 +27,7 @@ export const DEFAULT_SETTINGS: Settings = {
     copyOnSelect: false,
     confirmMultilinePaste: true,
   },
+  remoteDesktop: { quality: "auto", scale: "fit", clipboardSync: false, uploadDir: "Desktop" },
 };
 
 interface SettingsState {

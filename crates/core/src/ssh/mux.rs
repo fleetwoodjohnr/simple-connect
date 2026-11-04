@@ -133,18 +133,26 @@ pub struct Master {
     pub info: SecurityInfo,
     child: Arc<tokio::sync::Mutex<Child>>,
     /// Recent stderr (debug lines included), for diagnosing a later disconnect.
-    log: Arc<Mutex<Vec<String>>>,
+    log: Arc<Mutex<LogBuf>>,
     exited: watch::Receiver<bool>,
 }
 
 const LOG_LINES: usize = 200;
 
-fn push_log(log: &Mutex<Vec<String>>, line: String) {
+#[derive(Default)]
+struct LogBuf {
+    lines: Vec<String>,
+    /// Lines ever logged, so callers can ask for what came after a point.
+    total: u64,
+}
+
+fn push_log(log: &Mutex<LogBuf>, line: String) {
     if let Ok(mut l) = log.lock() {
-        if l.len() >= LOG_LINES {
-            l.remove(0);
+        if l.lines.len() >= LOG_LINES {
+            l.lines.remove(0);
         }
-        l.push(line);
+        l.lines.push(line);
+        l.total += 1;
     }
 }
 
@@ -177,7 +185,7 @@ pub async fn start(
     on_phase(Phase::Connecting, &SecurityInfo::default());
 
     let stderr = child.stderr.take().expect("stderr is piped");
-    let log: Arc<Mutex<Vec<String>>> = Arc::default();
+    let log: Arc<Mutex<LogBuf>> = Arc::default();
     let info: Arc<Mutex<SecurityInfo>> = Arc::default();
     let (exit_tx, exited) = watch::channel(false);
     let child = Arc::new(tokio::sync::Mutex::new(child));
@@ -222,7 +230,7 @@ pub async fn start(
             _ = exit_rx.changed() => {
                 // Let the stderr reader drain the final lines.
                 tokio::time::sleep(Duration::from_millis(50)).await;
-                let lines = log.lock().map(|l| l.clone()).unwrap_or_default();
+                let lines = log.lock().map(|l| l.lines.clone()).unwrap_or_default();
                 return Err(classify(&lines));
             }
             _ = tokio::time::sleep(Duration::from_millis(40)) => {}
@@ -247,7 +255,24 @@ impl Master {
 
     /// Why the connection ended, from the master's stderr.
     pub fn failure(&self) -> ConnectFailure {
-        classify(&self.log.lock().map(|l| l.clone()).unwrap_or_default())
+        classify(&self.log.lock().map(|l| l.lines.clone()).unwrap_or_default())
+    }
+
+    /// A position in the master's stderr, for [`Master::log_since`].
+    pub fn log_mark(&self) -> u64 {
+        self.log.lock().map(|l| l.total).unwrap_or(0)
+    }
+
+    /// The master's stderr lines after `mark`. Failed forwards are only
+    /// explained here: a multiplexed client just sees "Session open refused by peer".
+    pub fn log_since(&self, mark: u64) -> Vec<String> {
+        self.log
+            .lock()
+            .map(|l| {
+                let n = usize::try_from(l.total.saturating_sub(mark)).unwrap_or(usize::MAX).min(l.lines.len());
+                l.lines[l.lines.len() - n..].to_vec()
+            })
+            .unwrap_or_default()
     }
 
     /// Arguments for a multiplexed client through this master (no re-authentication).

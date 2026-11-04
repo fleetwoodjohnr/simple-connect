@@ -60,6 +60,7 @@ export function TabStrip() {
                 <ContextItem onSelect={() => void api.reconnect(t.id)}>Reconnect</ContextItem>
                 {profile && <ContextItem onSelect={() => void connect({ kind: "profile", profile })}>Duplicate session</ContextItem>}
                 <ContextItem onSelect={() => (setActive(t.id), setView(t.id, "files"))}>Open file browser</ContextItem>
+                <ContextItem onSelect={() => (setActive(t.id), setView(t.id, "desktop"))}>Open remote desktop</ContextItem>
                 <ContextItem onSelect={() => (setActive(t.id), setView(t.id, "tunnels"))}>Open tunnel manager</ContextItem>
                 {profile && <ContextItem onSelect={() => setEditing({ profile })}>Edit connection</ContextItem>}
                 {!profile && t.quick && (

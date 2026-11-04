@@ -33,7 +33,18 @@ export function parseOsc7(data: string): string | null {
  * backend shell is (re)opened whenever the session is connected and none is
  * running. Input typed while disconnected is dropped, never replayed.
  */
-export function TerminalView({ session, connected, visible }: { session: string; connected: boolean; visible: boolean }) {
+export function TerminalView({
+  session,
+  connected,
+  visible,
+  recipe,
+}: {
+  session: string;
+  connected: boolean;
+  visible: boolean;
+  /** Remote desktop setup step to run in the first shell (see RemoteDesktop). */
+  recipe?: string;
+}) {
   const host = useRef<HTMLDivElement>(null);
   const term = useRef<Terminal | null>(null);
   const fit = useRef<FitAddon | null>(null);
@@ -207,8 +218,10 @@ export function TerminalView({ session, connected, visible }: { session: string;
       });
     };
     const wasOpenBefore = t.buffer.active.length > t.rows;
+    // The setup step runs once; later shells in this slot are plain ones.
+    const step = wasOpenBefore || shellGen > 0 ? null : (recipe ?? null);
     api
-      .openTerminal(session, t.cols, t.rows, channel)
+      .openTerminal(session, t.cols, t.rows, channel, step)
       .then((id) => {
         backendId.current = id;
         if (wasOpenBefore) t.write("\x1b[2m— New shell —\x1b[0m\r\n");

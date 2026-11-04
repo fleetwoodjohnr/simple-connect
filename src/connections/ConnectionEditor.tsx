@@ -5,7 +5,7 @@ import { useUi } from "../stores/ui";
 import { profileToDraft, useConnections } from "../stores/connections";
 import { useSessions } from "../stores/sessions";
 import { api, isCmdError } from "../services/ipc";
-import type { AuthMethod, KeyInfo, ProfileDraft } from "../types/ipc";
+import type { AuthMethod, DesktopMethod, KeyInfo, ProfileDraft } from "../types/ipc";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { Dialog } from "../components/ui/Dialog";
 import { Button } from "../components/ui/Button";
@@ -31,7 +31,18 @@ const EMPTY: ProfileDraft = {
   tags: [],
   mac: null,
   reusePassword: null,
+  rdUser: null,
+  rdMethod: null,
 };
+
+const DESKTOP_METHODS: { value: DesktopMethod | ""; label: string }[] = [
+  { value: "", label: "Choose automatically" },
+  { value: "x11", label: "Share the computer's screen (X11)" },
+  { value: "wayland", label: "Share the computer's screen (Wayland)" },
+  { value: "virtual", label: "Virtual desktop" },
+  { value: "rdp", label: "Remote Desktop (RDP)" },
+  { value: "vnc", label: "VNC server" },
+];
 
 const AUTH: { value: AuthMethod; label: string; hint: string }[] = [
   { value: "auto", label: "Automatic", hint: "Try your SSH agent and keys, then ask for a password." },
@@ -86,12 +97,14 @@ export function ConnectionEditor() {
   const [legacy, setLegacy] = useState(false);
   const [confirmLegacy, setConfirmLegacy] = useState(false);
   const [hasSecret, setHasSecret] = useState(false);
+  const [hasDesktopSecret, setHasDesktopSecret] = useState(false);
 
   useEffect(() => {
     if (!editing) return;
     setDraft(editing.profile ? profileToDraft(editing.profile) : { ...EMPTY, ...editing.initial });
     setLegacy(editing.profile?.legacyCrypto ?? false);
     setHasSecret(editing.profile?.hasSavedSecret ?? false);
+    setHasDesktopSecret(editing.profile?.hasSavedDesktopSecret ?? false);
     setErrors({});
     setFormError(null);
     void api.listKeys().then(setKeys, () => setKeys([]));
@@ -105,7 +118,7 @@ export function ConnectionEditor() {
   };
 
   const set = <K extends keyof ProfileDraft>(key: K, value: ProfileDraft[K]) => setDraft((d) => ({ ...d, [key]: value }));
-  const text = (key: "name" | "host" | "username" | "identityFile" | "jump" | "startDir") => ({
+  const text = (key: "name" | "host" | "username" | "identityFile" | "jump" | "startDir" | "rdUser") => ({
     value: draft[key] ?? "",
     error: errors[key],
     onChange: (e: React.ChangeEvent<HTMLInputElement>) => set(key, key === "name" || key === "host" ? e.target.value : nullIfEmpty(e.target.value)),
@@ -283,6 +296,47 @@ export function ConnectionEditor() {
               ))}
             </div>
           </div>
+        </Section>
+
+        <Section title="Remote desktop" defaultOpen={!!(draft.rdUser || draft.rdMethod)}>
+          <Field
+            label="Sign in as"
+            placeholder={draft.username ?? "Same as SSH user"}
+            hint="For Windows Remote Desktop and macOS Screen Sharing. Use DOMAIN\\name for domain accounts."
+            {...text("rdUser")}
+          />
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="rd-method" className="font-medium text-muted">
+              Open with
+            </label>
+            <select
+              id="rd-method"
+              className={inputClass}
+              value={draft.rdMethod ?? ""}
+              onChange={(e) => set("rdMethod", (e.target.value || null) as DesktopMethod | null)}
+            >
+              {DESKTOP_METHODS.map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+            {errors.rdMethod && <p className="text-xs text-bad">{errors.rdMethod}</p>}
+          </div>
+          {editing?.profile && hasDesktopSecret && (
+            <div className="col-span-2 flex items-center justify-between">
+              <span className="text-muted">A remote desktop password is saved for this connection.</span>
+              <Button
+                onClick={async () => {
+                  await api.forgetSavedPassword(editing.profile!.id, true);
+                  setHasDesktopSecret(false);
+                  await load();
+                }}
+              >
+                Forget it
+              </Button>
+            </div>
+          )}
         </Section>
 
         {editing?.profile && (

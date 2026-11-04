@@ -4,6 +4,7 @@
 //! [`UiEvent`]s to the webview. Keeping this logic here means it is exercised by
 //! the integration tests without a GUI.
 
+pub mod desktop;
 pub mod sysinfo;
 pub mod transfers;
 pub mod tunnels;
@@ -116,6 +117,11 @@ pub enum UiEvent {
         terminal: String,
         visible: bool,
     },
+    Desktop {
+        session: String,
+        desktop: String,
+        state: desktop::DesktopState,
+    },
 }
 
 pub trait Ui: Send + Sync + 'static {
@@ -157,6 +163,9 @@ pub struct ConnectRequest {
 enum SaveTarget {
     ProfilePassword(String),
     KeyPassphrase(PathBuf),
+    /// Saved only after the remote desktop accepted it. `true`: an account
+    /// password (RDP, macOS), `false`: a VNC password.
+    DesktopPassword(String, bool),
 }
 
 enum Pending {
@@ -200,6 +209,11 @@ pub struct Session {
     login_password: Mutex<Option<SecretString>>,
     /// A secret the user asked to save; stored only once sign-in succeeds.
     save_on_success: Mutex<Vec<(SaveTarget, SecretString)>>,
+    desktops: desktop::Desktops,
+    /// The account name the server reported (`id -un`), for remote desktop sign-in.
+    remote_user: Mutex<Option<String>>,
+    /// A saved or reused remote desktop password was just rejected: ask next time.
+    desktop_autofill_failed: AtomicBool,
 }
 
 impl Session {
@@ -294,15 +308,22 @@ impl Manager {
         let store = self.store()?;
         let id = match &target {
             SaveTarget::KeyPassphrase(path) => passphrase_ref(path),
-            SaveTarget::ProfilePassword(pid) => {
+            SaveTarget::ProfilePassword(pid) | SaveTarget::DesktopPassword(pid, _) => {
+                let desktop = matches!(target, SaveTarget::DesktopPassword(..));
                 let conn = self.db.lock().map_err(|_| AppError::Invalid("database unavailable".into()))?;
-                match profiles::secret_ref(&conn, pid).map_err(|e| AppError::Invalid(e.to_string()))? {
+                let get = if desktop { profiles::desktop_secret_ref } else { profiles::secret_ref };
+                let set = if desktop { profiles::set_desktop_secret_ref } else { profiles::set_secret_ref };
+                let base = match get(&conn, pid).map_err(|e| AppError::Invalid(e.to_string()))? {
                     Some(r) => r,
                     None => {
                         let r = new_password_ref();
-                        profiles::set_secret_ref(&conn, pid, Some(&r)).map_err(|e| AppError::Invalid(e.to_string()))?;
+                        set(&conn, pid, Some(&r)).map_err(|e| AppError::Invalid(e.to_string()))?;
                         r
                     }
+                };
+                match target {
+                    SaveTarget::DesktopPassword(_, account) => crate::security::desktop_secret_id(&base, account),
+                    _ => base,
                 }
             }
         };
@@ -341,6 +362,9 @@ impl Manager {
             login_candidate: Mutex::default(),
             login_password: Mutex::default(),
             save_on_success: Mutex::default(),
+            desktops: Mutex::default(),
+            remote_user: Mutex::default(),
+            desktop_autofill_failed: AtomicBool::new(false),
         });
         if let Ok(mut map) = self.sessions.lock() {
             map.insert(id.clone(), s.clone());
@@ -478,7 +502,17 @@ impl Manager {
     }
 
     async fn commit_saved_secrets(&self, s: &Session) {
-        let pending: Vec<_> = s.save_on_success.lock().map(|mut v| std::mem::take(&mut *v)).unwrap_or_default();
+        // Remote desktop passwords are saved when the desktop accepts them.
+        let pending: Vec<_> = s
+            .save_on_success
+            .lock()
+            .map(|mut v| {
+                let (desk, ssh): (Vec<_>, Vec<_>) =
+                    std::mem::take(&mut *v).into_iter().partition(|(t, _)| matches!(t, SaveTarget::DesktopPassword(..)));
+                *v = desk;
+                ssh
+            })
+            .unwrap_or_default();
         for (target, secret) in pending {
             if let Err(e) = self.save_secret(target, secret).await {
                 tracing::warn!(session = %s.id, "could not save secret: {e}");
@@ -507,6 +541,9 @@ impl Manager {
         self.transfers.cancel_session(id);
         if let Ok(mut t) = s.terminals.lock() {
             t.drain().for_each(|(_, entry)| entry.term.kill());
+        }
+        if let Ok(mut d) = s.desktops.lock() {
+            d.clear(); // dropping a desktop stops it
         }
         if let Some(m) = s.master() {
             m.close().await;
@@ -694,18 +731,25 @@ impl Manager {
 
     // ---- terminals ------------------------------------------------------------
 
+    /// Opens a shell, or with `recipe` runs that remote desktop setup recipe
+    /// (see [`crate::desktop::probe::RECIPES`]) in the terminal for the user to watch.
     pub fn open_terminal(
         self: &Arc<Self>,
         session: &str,
         cols: u16,
         rows: u16,
+        recipe: Option<&str>,
         sink: impl FnMut(Vec<u8>) + Send + 'static,
     ) -> Result<String, AppError> {
         let s = self.session(session)?;
         let master = s.master().ok_or(AppError::NotConnected)?;
         let mut args = master.client_args(&s.req.dest);
         args.extend(["-tt".into(), "--".into(), s.req.dest.host.as_str().into()]);
-        if let Some(dir) = &s.req.start_dir {
+        if let Some(id) = recipe {
+            let r = crate::desktop::probe::recipe(id).ok_or_else(|| AppError::Invalid("Unknown setup step.".into()))?;
+            tracing::info!(session = %s.id, recipe = r.id, "running remote desktop setup");
+            args.push(crate::desktop::probe::recipe_command(r).into());
+        } else if let Some(dir) = &s.req.start_dir {
             args.push(format!("cd -- {} 2>/dev/null; exec \"$SHELL\" -l", crate::ssh::shell::quote(dir)).into());
         }
         let term_id = uuid::Uuid::new_v4().to_string();

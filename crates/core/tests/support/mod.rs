@@ -15,6 +15,8 @@ use tokio::sync::mpsc;
 use zeroize::Zeroizing;
 
 const IMAGE: &str = "simple-connect-sshd";
+/// sshd plus desktops for remote desktop tests (tests/desktop).
+pub const DESKTOP_IMAGE: &str = "simple-connect-desktop";
 
 fn podman(args: &[&str]) -> String {
     let out = Command::new("podman").args(args).output().expect("podman is required for integration tests");
@@ -26,6 +28,7 @@ pub struct Sshd {
     pub name: String,
     pub port: u16,
     authorized_key: String,
+    image: &'static str,
 }
 
 impl Sshd {
@@ -35,8 +38,21 @@ impl Sshd {
             let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/sshd");
             podman(&["build", "-q", "-t", IMAGE, dir.to_str().unwrap()]);
         });
+        Self::run_image(IMAGE, authorized_key)
+    }
+
+    pub fn start_desktop() -> Sshd {
+        static BUILD: Once = Once::new();
+        BUILD.call_once(|| {
+            let tests = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests");
+            podman(&["build", "-q", "-t", DESKTOP_IMAGE, "-f", "desktop/Containerfile", tests.to_str().unwrap()]);
+        });
+        Self::run_image(DESKTOP_IMAGE, "")
+    }
+
+    fn run_image(image: &'static str, authorized_key: &str) -> Sshd {
         let name = format!("sc-it-{}", &simple_connect_core::ssh::helper::random_token()[..12]);
-        let mut s = Sshd { name, port: 0, authorized_key: authorized_key.to_owned() };
+        let mut s = Sshd { name, port: 0, authorized_key: authorized_key.to_owned(), image };
         s.run("127.0.0.1::22");
         let mapped = podman(&["port", &s.name, "22"]);
         s.port = mapped.rsplit(':').next().unwrap().parse().unwrap();
@@ -55,8 +71,18 @@ impl Sshd {
             publish,
             "-e",
             &format!("AUTHORIZED_KEY={}", self.authorized_key),
-            IMAGE,
+            self.image,
         ]);
+    }
+
+    /// Ends every SSH connection but keeps the server and its other programs running.
+    pub fn drop_connections(&self) {
+        podman(&["exec", &self.name, "pkill", "sshd-session"]);
+    }
+
+    /// Runs a command in the container as `user` and returns its stdout.
+    pub fn exec(&self, user: &str, cmd: &str) -> String {
+        podman(&["exec", "-u", user, &self.name, "sh", "-c", cmd])
     }
 
     fn wait_ready(&self) {

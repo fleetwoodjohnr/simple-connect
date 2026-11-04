@@ -109,5 +109,7 @@ export function profileToDraft(p: Profile): ProfileDraft {
     tags: p.tags,
     mac: p.mac,
     reusePassword: p.reusePassword,
+    rdUser: p.rdUser,
+    rdMethod: p.rdMethod,
   };
 }

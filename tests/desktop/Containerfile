@@ -1,0 +1,24 @@
+# Disposable desktop host for remote-desktop integration tests. Never use outside tests.
+# Build from tests/: podman build -f desktop/Containerfile tests/
+#   :0          X11 desktop owned by "pw" (Xvfb + openbox + xterm), shared with x0vncserver
+#   wayland-1   headless sway session owned by "pw", shared with wayvnc
+#   127.0.0.1:3389  xrdp (loopback only)
+#   Xvnc + openbox for virtual desktops
+FROM docker.io/library/alpine:3.22
+RUN apk add --no-cache openssh-server openssh-sftp-server bash sudo procps \
+      xvfb xauth openbox xterm xsetroot font-misc-misc dbus dbus-x11 \
+      openssl tigervnc xrdp xorgxrdp xorg-server sway swaybg wayvnc \
+ && adduser -D -s /bin/bash pw && echo 'pw:correct horse' | chpasswd \
+ && adduser -D -s /bin/bash nofwd && echo 'nofwd:correct horse' | chpasswd \
+ && adduser -D -s /bin/bash key && passwd -u key \
+ && mkdir -p /home/key/.ssh && chmod 700 /home/key/.ssh \
+ && echo 'pw ALL=(ALL) ALL' > /etc/sudoers.d/pw && chmod 440 /etc/sudoers.d/pw \
+ && sed -i 's|^port=3389|port=tcp://127.0.0.1:3389|' /etc/xrdp/xrdp.ini \
+ && cp /usr/bin/sway /usr/local/bin/sway
+COPY sshd/sshd_config /etc/ssh/sshd_config
+RUN printf 'Match User nofwd\n    DisableForwarding yes\n' >> /etc/ssh/sshd_config
+COPY desktop/entrypoint.sh /entrypoint.sh
+COPY desktop/sway.conf /etc/sway/test.conf
+RUN chmod +x /entrypoint.sh
+EXPOSE 22
+ENTRYPOINT ["/entrypoint.sh"]

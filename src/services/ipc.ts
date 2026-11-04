@@ -19,6 +19,9 @@ import type {
   TunnelSpec,
   LocalNetwork,
   ScanEvent,
+  DesktopInput,
+  DesktopOpenRequest,
+  DesktopProbe,
 } from "../types/ipc";
 
 export function isCmdError(e: unknown): e is CmdError {
@@ -47,7 +50,7 @@ export const api = {
   createProfile: (draft: ProfileDraft) => call<Profile>("create_profile", { draft }),
   updateProfile: (id: string, draft: ProfileDraft) => call<Profile>("update_profile", { id, draft }),
   deleteProfile: (id: string) => call<void>("delete_profile", { id }),
-  forgetSavedPassword: (id: string) => call<void>("forget_saved_password", { id }),
+  forgetSavedPassword: (id: string, desktop = false) => call<void>("forget_saved_password", { id, desktop }),
   setFavorite: (id: string, favorite: boolean) => call<void>("set_favorite", { id, favorite }),
   setLegacyCrypto: (id: string, allow: boolean) => call<void>("set_legacy_crypto", { id, allow }),
   moveProfile: (id: string, groupId: string | null) => call<void>("move_profile", { id, groupId }),
@@ -66,8 +69,9 @@ export const api = {
   answerSecret: (id: number, value: string | null, save: boolean) => call<void>("answer_secret", { id, value, save }),
   systemInfo: (session: string) => call<SysInfo>("system_info", { session }),
 
-  openTerminal: (session: string, cols: number, rows: number, onOutput: Channel<ArrayBuffer>) =>
-    call<string>("open_terminal", { session, cols, rows, onOutput }),
+  /** With `recipe`, runs that remote desktop setup step (an id from the probe) in the terminal. */
+  openTerminal: (session: string, cols: number, rows: number, onOutput: Channel<ArrayBuffer>, recipe: string | null = null) =>
+    call<string>("open_terminal", { session, cols, rows, onOutput, recipe }),
   terminalWrite: (session: string, terminal: string, data: Uint8Array) =>
     call<void>("terminal_write", { session, terminal, data: Array.from(data) }),
   terminalResize: (session: string, terminal: string, cols: number, rows: number) =>
@@ -76,6 +80,18 @@ export const api = {
   closeTerminal: (session: string, terminal: string) => call<void>("close_terminal", { session, terminal }),
   /** Sends the login password to a waiting sudo prompt (it never leaves the backend). */
   terminalSendPassword: (session: string, terminal: string) => call<void>("terminal_send_password", { session, terminal }),
+
+  desktopProbe: (session: string) => call<DesktopProbe>("desktop_probe", { session }),
+  desktopOpen: (session: string, request: DesktopOpenRequest, onData: Channel<ArrayBuffer>) =>
+    call<string>("desktop_open", { session, request, onData }),
+  desktopWrite: (session: string, desktop: string, data: Uint8Array) => call<void>("desktop_write", { session, desktop, data: Array.from(data) }),
+  desktopAck: (session: string, desktop: string, bytes: number) => call<void>("desktop_ack", { session, desktop, bytes }),
+  desktopInput: (session: string, desktop: string, events: DesktopInput[]) => call<void>("desktop_input", { session, desktop, events }),
+  desktopResize: (session: string, desktop: string, width: number, height: number) =>
+    call<void>("desktop_resize", { session, desktop, width, height }),
+  desktopClipboard: (session: string, desktop: string, text: string) => call<void>("desktop_clipboard", { session, desktop, text }),
+  desktopClose: (session: string, desktop: string) => call<void>("desktop_close", { session, desktop }),
+  desktopEndVirtual: (session: string) => call<void>("desktop_end_virtual", { session }),
 
   listNetworks: () => call<LocalNetwork[]>("list_networks"),
   scanNetwork: (networkId: string, port: number, onEvent: Channel<ScanEvent>) => call<number>("scan_network", { networkId, port, onEvent }),

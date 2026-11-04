@@ -86,7 +86,16 @@
     "allow-import-profiles",
     "allow-list-networks",
     "allow-scan-network",
-    "allow-cancel-scan"
+    "allow-cancel-scan",
+    "allow-desktop-probe",
+    "allow-desktop-open",
+    "allow-desktop-write",
+    "allow-desktop-ack",
+    "allow-desktop-input",
+    "allow-desktop-resize",
+    "allow-desktop-clipboard",
+    "allow-desktop-close",
+    "allow-desktop-end-virtual"
   ],
   "windows": [
     "main"

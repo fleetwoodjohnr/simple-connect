@@ -1,16 +1,20 @@
-import { useRef } from "react";
-import { FolderTree, Info, Network, SquareTerminal } from "lucide-react";
+import { lazy, Suspense, useRef } from "react";
+import { FolderTree, Info, Monitor, Network, SquareTerminal } from "lucide-react";
 import { useSessions, type SessionTab, type SubView } from "../stores/sessions";
 import { useConnections } from "../stores/connections";
 import { TerminalPane } from "../terminal/TerminalPane";
 import { FileManager } from "../file-manager/FileManager";
 import { TunnelManager } from "../tunnels/TunnelManager";
 import { SessionInfo } from "../security/SessionInfo";
+
+// noVNC and the viewers load on first use.
+const RemoteDesktop = lazy(() => import("../desktop/RemoteDesktop").then((m) => ({ default: m.RemoteDesktop })));
 import { describeStatus } from "../stores/sessions";
 
 const VIEWS: { id: SubView; label: string; icon: typeof Info }[] = [
   { id: "terminal", label: "Terminal", icon: SquareTerminal },
   { id: "files", label: "Files", icon: FolderTree },
+  { id: "desktop", label: "Remote Desktop", icon: Monitor },
   { id: "tunnels", label: "Tunnels", icon: Network },
   { id: "info", label: "Connection", icon: Info },
 ];
@@ -27,6 +31,9 @@ export function SessionView({ tab, visible }: { tab: SessionTab; visible: boolea
   // Keep the file manager mounted once opened, so its folders survive view switches.
   const filesVisited = useRef(false);
   if (tab.view === "files") filesVisited.current = true;
+  // Likewise the remote desktop keeps running while other views are shown.
+  const desktopVisited = useRef(false);
+  if (tab.view === "desktop") desktopVisited.current = true;
 
   return (
     <div className="flex h-full flex-col" hidden={!visible}>
@@ -64,6 +71,13 @@ export function SessionView({ tab, visible }: { tab: SessionTab; visible: boolea
                     <SessionInfo tab={tab} />
                   </div>
                 ))}
+            </div>
+            <div className="absolute inset-0" hidden={tab.view !== "desktop"}>
+              {desktopVisited.current && (
+                <Suspense fallback={null}>
+                  <RemoteDesktop tab={tab} visible={visible && tab.view === "desktop"} />
+                </Suspense>
+              )}
             </div>
             {tab.view === "tunnels" && (
               <div className="h-full overflow-auto">

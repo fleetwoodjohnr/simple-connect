@@ -20,9 +20,12 @@ const profile = (over: Partial<Profile>): Profile => ({
   tags: ["Jetson", "Development"],
   mac: "48:b0:2d:00:00:01",
   reusePassword: null,
+  rdUser: null,
+  rdMethod: null,
   favorite: false,
   legacyCrypto: false,
   hasSavedSecret: false,
+  hasSavedDesktopSecret: false,
   lastUsedAt: null,
   ...over,
 });

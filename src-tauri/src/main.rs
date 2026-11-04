@@ -118,6 +118,15 @@ fn main() {
             commands::discovery::list_networks,
             commands::discovery::scan_network,
             commands::discovery::cancel_scan,
+            commands::desktop::desktop_probe,
+            commands::desktop::desktop_open,
+            commands::desktop::desktop_write,
+            commands::desktop::desktop_ack,
+            commands::desktop::desktop_input,
+            commands::desktop::desktop_resize,
+            commands::desktop::desktop_clipboard,
+            commands::desktop::desktop_close,
+            commands::desktop::desktop_end_virtual,
         ])
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| fatal("cannot start the user interface", e));

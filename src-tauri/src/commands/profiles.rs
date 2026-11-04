@@ -19,25 +19,38 @@ pub async fn update_profile(state: State<'_, AppState>, id: String, draft: Profi
     Ok(profiles::update(&mut *db_lock(&state.db)?, check_id(&id)?, &draft)?)
 }
 
-/// Deletes the profile and its saved password.
+/// Deletes the profile and its saved passwords.
 #[tauri::command]
 pub async fn delete_profile(state: State<'_, AppState>, id: String) -> CmdResult<()> {
-    let secret_ref = profiles::delete(&*db_lock(&state.db)?, check_id(&id)?)?;
-    if let (Some(r), Some(m)) = (secret_ref, &state.manager)
-        && let Err(e) = m.forget_secret(r).await
-    {
-        tracing::warn!("saved password not removed: {e}");
+    let refs = profiles::delete(&*db_lock(&state.db)?, check_id(&id)?)?;
+    for r in refs {
+        if let Some(m) = &state.manager
+            && let Err(e) = m.forget_secret(r).await
+        {
+            tracing::warn!("saved password not removed: {e}");
+        }
     }
     Ok(())
 }
 
+/// Forgets the saved SSH password, or the remote desktop password with `desktop`.
 #[tauri::command]
-pub async fn forget_saved_password(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+pub async fn forget_saved_password(state: State<'_, AppState>, id: String, desktop: Option<bool>) -> CmdResult<()> {
     let id = check_id(&id)?;
-    let secret_ref = profiles::secret_ref(&*db_lock(&state.db)?, id)?;
+    let desktop = desktop.unwrap_or(false);
+    let secret_ref =
+        if desktop { profiles::desktop_secret_ref(&*db_lock(&state.db)?, id)? } else { profiles::secret_ref(&*db_lock(&state.db)?, id)? };
     if let Some(r) = secret_ref {
-        super::manager(&state)?.forget_secret(r).await?;
-        profiles::set_secret_ref(&*db_lock(&state.db)?, id, None)?;
+        let m = super::manager(&state)?;
+        if desktop {
+            for id in profiles::desktop_secret_ids(&r) {
+                m.forget_secret(id).await?;
+            }
+        } else {
+            m.forget_secret(r).await?;
+        }
+        let conn = db_lock(&state.db)?;
+        if desktop { profiles::set_desktop_secret_ref(&conn, id, None)? } else { profiles::set_secret_ref(&conn, id, None)? }
     }
     Ok(())
 }

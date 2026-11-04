@@ -1,6 +1,6 @@
 # Simple Connect
 
-A secure SSH terminal and SFTP client for Linux. It is built on your system's
+A secure SSH terminal, SFTP and remote desktop client for Linux. It is built on your system's
 OpenSSH, with a modern interface and secure defaults.
 
 ![Terminal](docs/screenshots/terminal.png)
@@ -21,6 +21,12 @@ OpenSSH, with a modern interface and secure defaults.
   a visual route.
 * **sudo without retyping.** When `sudo` asks for your password, press Enter to send
   the password you signed in with. It is never shown, and never sent without your keypress.
+* **Remote desktop.** See and control the desktop of Linux (X11, Wayland, headless),
+  Windows and macOS computers over the same SSH connection: share the screen, open a
+  virtual desktop that survives disconnects, or use Remote Desktop (RDP) and Screen
+  Sharing. Fit or resize, full screen, clipboard, special keys, drop files to upload,
+  and guided setup when nothing is installed. Nothing is exposed to the network. See
+  [REMOTE_DESKTOP.md](REMOTE_DESKTOP.md).
 * **Tunnels.** Local, remote and SOCKS forwarding, restored after reconnects.
 * **Keys.** Generate Ed25519 / ECDSA / RSA or FIDO2 security-key SSH keys, import keys,
   copy or export public keys, and change passphrases.
@@ -70,9 +76,11 @@ none exists, use the encrypted vault.
 * [THREAT_MODEL.md](THREAT_MODEL.md): threats, mitigations and residual risks
 * [SECURITY.md](SECURITY.md): what is stored where, defaults, and reporting vulnerabilities
 * [SSH_SECURITY.md](SSH_SECURITY.md): algorithm policy, host keys and authentication
+* [REMOTE_DESKTOP.md](REMOTE_DESKTOP.md): remote desktop setup, security and limitations
 * [DEVELOPMENT.md](DEVELOPMENT.md): setup, layout and tests
 * [BUILDING.md](BUILDING.md): packaging and signed updates
 
 ## License
 
-MIT OR Apache-2.0.
+MIT OR Apache-2.0. The VNC viewer bundles [noVNC](https://github.com/novnc/noVNC)
+(MPL-2.0); RDP uses [IronRDP](https://github.com/Devolutions/IronRDP) (MIT OR Apache-2.0).

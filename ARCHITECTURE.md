@@ -1,6 +1,6 @@
 # Architecture
 
-Simple Connect is a desktop SSH terminal and SFTP client. It is a Tauri 2 application:
+Simple Connect is a desktop SSH terminal, SFTP and remote desktop client. It is a Tauri 2 application:
 a Rust backend owns every security-relevant decision, and a React/TypeScript frontend
 renders the UI inside the system webview. The SSH protocol itself is handled by the
 **system OpenSSH client** (`ssh`, `ssh-keygen`); the application orchestrates it.
@@ -30,7 +30,8 @@ renders the UI inside the system webview. The SSH protocol itself is handled by 
               simple-connect --sc-known-hosts      ssh -M -S ctl.sock -N  (master, per tab)
                                           │          ├── ssh -S ctl.sock -tt      (terminal, in a PTY)
                                           └──────────├── ssh -S ctl.sock -s sftp  (SFTP over stdio)
-                                                     └── ssh -S ctl.sock -O forward|cancel (tunnels)
+                                                     ├── ssh -S ctl.sock -O forward|cancel (tunnels)
+                                                     └── ssh -S ctl.sock -W 127.0.0.1:port|socket (remote desktop)
 ```
 
 * **Master.** `ssh -F <generated config> -M -S <socket> -N -v -- <destination>` with
@@ -103,6 +104,41 @@ hops get the same policy.
 * **Key management.** Keys are managed with `ssh-keygen`. New passphrases are supplied
   through askpass, never on the command line.
 
+## Remote desktop
+
+The **Remote Desktop** view reuses the session's master. Nothing listens on a local
+port, and every remote desktop server is reached on the remote computer itself.
+
+* **Probe.** A fixed POSIX script reads the user's own sessions, tools and X sessions
+  (Windows: two `reg query` commands). In parallel, `ssh -W` forwards fingerprint ports
+  3389/3390 (X.224 negotiation) and 5900–5903 (RFB banner). The result is ranked
+  *offers* and fixed *setup recipes*. The webview sends back a method and validated
+  numbers or names, never a host, path or command.
+* **Launch.** For screen sharing (TigerVNC `x0vncserver` on X11, `wayvnc` on wlroots)
+  and virtual desktops (`Xvnc` plus an X session), a fixed `sh` script started with
+  `ssh -T` creates a 0600 Unix socket in `~/.cache/simple-connect/rd/` and reports
+  `READY <path>`.
+  * A share stops when the script's stdin closes, so it lives exactly as long as the
+    connection.
+  * A virtual desktop runs in its own process group until its session ends, and is
+    reattached on the next connection.
+* **VNC.** `ssh -W <socket or 127.0.0.1:port>`. The backend performs the RFB security
+  handshake (None, VNC password, Apple ARD) and presents RFB 3.8 with security None to
+  noVNC in the webview. noVNC talks to an `IpcSocket` shim, which carries bytes over a
+  Tauri `Channel` (with acknowledgements and backpressure) and `desktop_write`.
+* **RDP.** The same forward is run by IronRDP on a dedicated thread with its own
+  current-thread runtime, because IronRDP's futures aren't `Send`.
+  * Security: X.224 negotiation (TLS or NLA only), then TLS via rustls with no CA
+    check and no key log, then CredSSP (NTLM).
+  * Display: decoded rectangles are coalesced and sent as RGBA to a `<canvas>`.
+  * Input arrives as typed events (`desktop_input`).
+  * Display Control resizes and reactivation are handled, and text clipboard runs over
+    CLIPRDR.
+* **Credentials.** Credentials use the session's prompt machinery. Saved desktop
+  passwords sit under the profile's `rd_secret_ref`, split by kind. The SSH password
+  is reused only for the same account.
+* **Reconnects.** When the session reconnects, the view reopens the same method.
+
 ## Modules
 
 ```
@@ -113,10 +149,15 @@ crates/core/src/
   logging.rs           tracing setup + redaction layer
   settings.rs          typed settings with secure defaults, clamped on load
   discovery.rs         user-initiated LAN scan: local subnets only, TCP probe + SSH banner, ARP, names
+  desktop/             remote desktop: request validation, launch scripts, targets
+    probe.rs           what a computer offers (fixed scripts, port fingerprints), setup recipes
+    rfb.rs             VNC security handshake in the backend; the synthetic None handshake for noVNC
+    rdp.rs             IronRDP connection on its own thread: TLS, NLA, decoding, input, clipboard
   app/                 the application core driven by the UI:
     mod.rs             sessions, reconnect with backoff, prompts, saved-secret autofill, terminals
     transfers.rs       transfer queue: folders, concurrency, conflicts, pause/resume, verification
     tunnels.rs         -L / -R / -D via `ssh -O forward|cancel`, restored after reconnect
+    desktop.rs         a session's remote desktops: forwards, sign-in, streaming with backpressure
     sysinfo.rs         unprivileged remote system information (fixed command)
   ssh/
     openssh.rs         locate ssh/ssh-keygen, check version (>= 8.5), `ssh -Q` discovery
@@ -140,8 +181,10 @@ src-tauri/src/
   commands/            #[tauri::command] adapters: validate → call core → map errors
 src/ (React)
   components/ pages/ terminal/ file-manager/ connections/ settings/ security/ tunnels/
+  desktop/ (Remote Desktop view, noVNC and RDP viewers, toolbar, scan codes)
   stores/ (zustand)  services/ (typed IPC + event bridge)  hooks/  types/
 tests/sshd/            disposable OpenSSH server image for integration tests
+tests/desktop/         the same plus Xvfb, Sway, TigerVNC and xrdp for remote desktop tests
 tests/e2e/             WebDriver smoke test of the packaged app
 ```
 

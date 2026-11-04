@@ -55,9 +55,18 @@ struct ExportProfile {
     mac: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reuse_password: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rd_user: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rd_method: Option<String>,
     /// Present only inside encrypted backups.
     #[serde(skip_serializing_if = "Option::is_none")]
     password: Option<String>,
+    /// Remote desktop passwords (account, VNC); present only inside encrypted backups.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    desktop_password: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    vnc_password: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -95,15 +104,21 @@ pub fn export(
     let profiles: Vec<Profile> = list(conn).map_err(db)?;
     let mut out = Vec::with_capacity(profiles.len());
     for p in profiles {
-        let password = match (backup_password, store, p.has_saved_secret) {
-            (Some(_), Some(store), true) => {
-                let r = super::secret_ref(conn, &p.id).map_err(db)?;
-                match r {
-                    Some(r) => store.get(&r).map_err(|e| TransferError::Secrets(e.to_string()))?.map(|s| s.expose_secret().to_owned()),
-                    None => None,
+        let saved = |r: Option<String>| -> Result<Option<String>, TransferError> {
+            match (r, store) {
+                (Some(r), Some(store)) => {
+                    Ok(store.get(&r).map_err(|e| TransferError::Secrets(e.to_string()))?.map(|s| s.expose_secret().to_owned()))
                 }
+                _ => Ok(None),
             }
-            _ => None,
+        };
+        let (password, desktop_password, vnc_password) = if backup_password.is_some() {
+            let ssh = if p.has_saved_secret { saved(super::secret_ref(conn, &p.id).map_err(db)?)? } else { None };
+            let rd = if p.has_saved_desktop_secret { super::desktop_secret_ref(conn, &p.id).map_err(db)? } else { None };
+            let kind = |account| rd.as_deref().map(|r| crate::security::desktop_secret_id(r, account));
+            (ssh, saved(kind(true))?, saved(kind(false))?)
+        } else {
+            (None, None, None)
         };
         let f = p.fields;
         out.push(ExportProfile {
@@ -124,7 +139,11 @@ pub fn export(
             favorite: p.favorite,
             mac: f.mac,
             reuse_password: f.reuse_password,
+            rd_user: f.rd_user,
+            rd_method: f.rd_method.map(|m| m.as_str().to_owned()),
             password,
+            desktop_password,
+            vnc_password,
         });
     }
     let json = zeroize::Zeroizing::new(
@@ -204,6 +223,8 @@ pub fn import(
             tags: p.tags,
             mac: p.mac,
             reuse_password: p.reuse_password,
+            rd_user: p.rd_user,
+            rd_method: p.rd_method,
         };
         match create(conn, &draft) {
             Ok(created) => {
@@ -215,6 +236,20 @@ pub fn import(
                     let r = new_password_ref();
                     if store.set(&r, &SecretString::from(pw)).is_ok() {
                         let _ = super::set_secret_ref(conn, &created.id, Some(&r));
+                    }
+                }
+                if let Some(store) = store
+                    && (p.desktop_password.is_some() || p.vnc_password.is_some())
+                {
+                    let r = new_password_ref();
+                    let mut ok = false;
+                    for (pw, account) in [(p.desktop_password, true), (p.vnc_password, false)] {
+                        if let Some(pw) = pw {
+                            ok |= store.set(&crate::security::desktop_secret_id(&r, account), &SecretString::from(pw)).is_ok();
+                        }
+                    }
+                    if ok {
+                        let _ = super::set_desktop_secret_ref(conn, &created.id, Some(&r));
                     }
                 }
             }
@@ -250,6 +285,8 @@ mod tests {
         set_favorite(conn, &p.id, true).unwrap();
         store.set("password:x", &SecretString::from("hunter2")).unwrap();
         super::super::set_secret_ref(conn, &p.id, Some("password:x")).unwrap();
+        store.set("password:rd:account", &SecretString::from("rdpass77")).unwrap();
+        super::super::set_desktop_secret_ref(conn, &p.id, Some("password:rd")).unwrap();
     }
 
     #[test]
@@ -258,7 +295,7 @@ mod tests {
         seed(&mut conn, &store);
         let data = export(&conn, None, Some(&store)).unwrap();
         let text = String::from_utf8(data.clone()).unwrap();
-        assert!(!text.contains("hunter2") && !text.contains("password"));
+        assert!(!text.contains("hunter2") && !text.contains("rdpass77") && !text.contains("assword"));
 
         let mut other = open_in_memory().unwrap();
         let report = import(&mut other, &data, None, None).unwrap();
@@ -282,8 +319,12 @@ mod tests {
         assert!(matches!(import(&mut other, &data, None, None), Err(TransferError::NeedsPassword)));
         assert!(matches!(import(&mut other, &data, Some(&SecretString::from("bad")), None), Err(TransferError::WrongPassword)));
         import(&mut other, &data, Some(&pw), Some(&other_store)).unwrap();
-        let r = super::super::secret_ref(&other, &list(&other).unwrap()[0].id).unwrap().unwrap();
+        let id = list(&other).unwrap()[0].id.clone();
+        let r = super::super::secret_ref(&other, &id).unwrap().unwrap();
         assert_eq!(other_store.get(&r).unwrap().unwrap().expose_secret(), "hunter2");
+        let r = super::super::desktop_secret_ref(&other, &id).unwrap().unwrap();
+        let account = crate::security::desktop_secret_id(&r, true);
+        assert_eq!(other_store.get(&account).unwrap().unwrap().expose_secret(), "rdpass77");
     }
 
     #[test]

@@ -5,11 +5,13 @@ import type { ConnectTarget } from "../types/session";
 import { findProfile, useConnections } from "./connections";
 import { formatDestination } from "../connections/RoutePreview";
 
-export type SubView = "terminal" | "files" | "tunnels" | "info";
+export type SubView = "terminal" | "files" | "desktop" | "tunnels" | "info";
 
 export interface TerminalSlot {
   key: string;
   title: string;
+  /** A remote desktop setup step to run instead of a plain shell. */
+  recipe?: string;
 }
 
 export interface SessionTab {
@@ -58,7 +60,7 @@ interface SessionsState {
   close: (id: string) => Promise<void>;
   setActive: (id: string | null) => void;
   setView: (id: string, view: SubView) => void;
-  addTerminal: (id: string) => void;
+  addTerminal: (id: string, recipe?: { id: string; title: string }) => void;
   removeTerminal: (id: string, key: string) => void;
   setActiveTerminal: (id: string, key: string) => void;
   setCwd: (id: string, cwd: string) => void;
@@ -163,9 +165,10 @@ export const useSessions = create<SessionsState>((set, get) => {
 
     setActive: (activeId) => set({ activeId }),
     setView: (id, view) => update(id, () => ({ view })),
-    addTerminal: (id) =>
+    addTerminal: (id, recipe) =>
       update(id, (t) => {
         const slot = newSlot(t.terminals.length + 1);
+        if (recipe) Object.assign(slot, { recipe: recipe.id, title: recipe.title });
         return { terminals: [...t.terminals, slot], activeTerminal: slot.key, view: "terminal" };
       }),
     removeTerminal: (id, key) =>
@@ -221,6 +224,9 @@ export const useSessions = create<SessionsState>((set, get) => {
           break;
         case "passwordPrompt":
           window.dispatchEvent(new CustomEvent("password-prompt", { detail: { terminal: e.terminal, visible: e.visible } }));
+          break;
+        case "desktop":
+          window.dispatchEvent(new CustomEvent("desktop-state", { detail: { desktop: e.desktop, state: e.state } }));
           break;
       }
     },

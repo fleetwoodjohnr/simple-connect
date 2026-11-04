@@ -3,6 +3,7 @@
 //! `{ code, message, details, fields }` with a user-friendly `message`.
 
 pub mod backup;
+pub mod desktop;
 pub mod discovery;
 pub mod files;
 pub mod keys;

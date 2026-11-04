@@ -20,10 +20,11 @@ published, and reporters are credited unless they prefer otherwise.
 | Data | Location | Protection |
 |---|---|---|
 | Connections, folders, tags, device MAC addresses, settings | `~/.local/share/simple-connect/app.db` | File 0600, directory 0700. **No secrets** — only opaque references. |
-| Saved passwords and key passphrases | System keyring (Secret Service: GNOME Keyring, KWallet…) **or** `vault.bin` | Keyring: protected by your login. Vault: Argon2id (64 MiB, 3 passes, 4 lanes) → XChaCha20-Poly1305, random salt, fresh nonce per write, header authenticated. |
+| Saved passwords (SSH and remote desktop) and key passphrases | System keyring (Secret Service: GNOME Keyring, KWallet…) **or** `vault.bin` | Keyring: protected by your login. Vault: Argon2id (64 MiB, 3 passes, 4 lanes) → XChaCha20-Poly1305, random salt, fresh nonce per write, header authenticated. |
 | Trusted host keys | `~/.local/share/simple-connect/known_hosts` | 0600, OpenSSH format. |
 | Logs | `~/.local/state/simple-connect/logs/` | Directory 0700, rotated daily (7 files), redacted. |
 | Control sockets, generated SSH configs | `$XDG_RUNTIME_DIR/simple-connect/` | tmpfs, 0700, removed on exit; stale ones are cleaned at startup. |
+| On the remote computer: sockets of desktop servers Simple Connect starts | `~/.cache/simple-connect/rd/` | Directory 0700, sockets 0600, no TCP ports. Removed when sharing stops or the virtual desktop ends. |
 
 Files opened in the editor are kept **in memory only** — no local temporary copy is
 written — and are saved back atomically (temporary file + rename on the server).

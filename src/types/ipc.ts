@@ -57,6 +57,10 @@ export interface ProfileDraft {
   mac: string | null;
   /** Offer the login password at sudo prompts; null follows the app setting. */
   reusePassword: boolean | null;
+  /** Remote desktop sign-in name; null uses the SSH user. */
+  rdUser: string | null;
+  /** Preferred remote desktop method; null chooses automatically. */
+  rdMethod: DesktopMethod | null;
 }
 
 export interface Profile extends Omit<ProfileDraft, "jump"> {
@@ -65,6 +69,7 @@ export interface Profile extends Omit<ProfileDraft, "jump"> {
   favorite: boolean;
   legacyCrypto: boolean;
   hasSavedSecret: boolean;
+  hasSavedDesktopSecret: boolean;
   lastUsedAt: number | null;
 }
 
@@ -172,7 +177,83 @@ export type UiEvent =
   | { type: "terminalExit"; session: string; terminal: string }
   | { type: "transfers"; jobs: JobView[] }
   | { type: "tunnels"; session: string; tunnels: Tunnel[] }
-  | { type: "passwordPrompt"; session: string; terminal: string; visible: boolean };
+  | { type: "passwordPrompt"; session: string; terminal: string; visible: boolean }
+  | { type: "desktop"; session: string; desktop: string; state: DesktopState };
+
+// ---- remote desktop ---------------------------------------------------------
+
+export type DesktopMethod = "x11" | "wayland" | "virtual" | "vnc" | "rdp";
+export type DesktopQuality = "auto" | "high" | "balanced" | "low";
+export type DesktopScale = "fit" | "actual" | "remote";
+
+export interface DesktopOffer {
+  method: DesktopMethod;
+  port: number | null;
+  display: number | null;
+  wayland: string | null;
+  title: string;
+  detail: string;
+  recommended: boolean;
+  signIn: boolean;
+  running: boolean;
+}
+
+export interface DesktopSetup {
+  recipe: string;
+  title: string;
+  detail: string;
+  commands: string[];
+}
+
+export interface DesktopProbe {
+  os: "linux" | "macos" | "windows" | "other";
+  osName: string | null;
+  user: string | null;
+  jetson: boolean;
+  offers: DesktopOffer[];
+  setups: DesktopSetup[];
+  notes: string[];
+  sessions: { id: string; name: string }[];
+}
+
+export interface DesktopOpenRequest {
+  method: DesktopMethod;
+  port: number | null;
+  display: number | null;
+  wayland: string | null;
+  session: string | null;
+  width: number;
+  height: number;
+  user: string | null;
+  quality: DesktopQuality;
+}
+
+export interface DesktopError {
+  code: string;
+  message: string;
+  details: string | null;
+}
+
+export type DesktopState =
+  | { state: "connecting"; step: "starting" | "connecting" | "signingIn" }
+  | { state: "connected"; protocol: "vnc" | "rdp"; latencyMs: number }
+  | { state: "closed"; error: DesktopError | null };
+
+/** RDP input; keys are PC scan codes, positions are remote desktop pixels. */
+export type DesktopInput =
+  | { type: "key"; scancode: number; extended: boolean; down: boolean }
+  | { type: "unicode"; ch: number; down: boolean }
+  | { type: "mouse"; x: number; y: number }
+  | { type: "button"; button: "left" | "middle" | "right" | "x1" | "x2"; down: boolean }
+  | { type: "wheel"; delta: number; horizontal: boolean }
+  | { type: "releaseAll" };
+
+export interface DesktopSettings {
+  quality: DesktopQuality;
+  scale: DesktopScale;
+  clipboardSync: boolean;
+  uploadDir: string;
+}
 
 // ---- files ------------------------------------------------------------------
 
@@ -246,6 +327,7 @@ export interface Settings {
   showHiddenFiles: boolean;
   reuseSshPassword: boolean;
   terminal: TerminalSettings;
+  remoteDesktop: DesktopSettings;
 }
 
 export interface ImportReport {

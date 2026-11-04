@@ -4,13 +4,22 @@ use tauri::ipc::{Channel, Response};
 use super::{CmdError, CmdResult, check_id, manager};
 use crate::state::AppState;
 
-/// Opens a shell. Output is streamed as raw bytes over `on_output`.
+/// Opens a shell, or runs a remote desktop setup recipe (by id from the fixed
+/// list, never command text). Output is streamed as raw bytes over `on_output`.
 #[tauri::command]
-pub fn open_terminal(state: State<'_, AppState>, session: String, cols: u16, rows: u16, on_output: Channel<Response>) -> CmdResult<String> {
+pub fn open_terminal(
+    state: State<'_, AppState>,
+    session: String,
+    cols: u16,
+    rows: u16,
+    recipe: Option<String>,
+    on_output: Channel<Response>,
+) -> CmdResult<String> {
     let sink = move |bytes: Vec<u8>| {
         let _ = on_output.send(Response::new(bytes));
     };
-    Ok(manager(&state)?.open_terminal(check_id(&session)?, cols, rows, sink)?)
+    let recipe = recipe.as_deref().map(check_id).transpose()?;
+    Ok(manager(&state)?.open_terminal(check_id(&session)?, cols, rows, recipe, sink)?)
 }
 
 #[tauri::command]

@@ -3,7 +3,7 @@ import { ArrowLeft } from "lucide-react";
 import { api } from "../services/ipc";
 import type { AppInfo } from "../types/ipc";
 import { useUi } from "../stores/ui";
-import { AppearanceSettings, ConnectionSettings, TerminalSettings } from "./GeneralSettings";
+import { AppearanceSettings, ConnectionSettings, DesktopSettings, TerminalSettings } from "./GeneralSettings";
 import { SecuritySettings } from "./SecuritySettings";
 import { KeyManager } from "./KeyManager";
 import { BackupSettings } from "./BackupSettings";
@@ -44,6 +44,7 @@ export function SettingsPage({ initial = "General" }: { initial?: Page }) {
               <AppearanceSettings />
               <TerminalSettings />
               <ConnectionSettings />
+              <DesktopSettings />
             </>
           )}
           {page === "Security" && <SecuritySettings info={info} reloadInfo={loadInfo} />}

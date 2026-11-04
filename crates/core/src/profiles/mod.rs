@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 
+use crate::desktop::Method;
 use crate::storage::now;
 use crate::validate::{self, Host, JumpHop, User};
 
@@ -74,6 +75,10 @@ pub struct ProfileDraft {
     pub mac: Option<String>,
     /// Offer the login password at sudo/su prompts. `None` follows the app setting.
     pub reuse_password: Option<bool>,
+    /// Remote desktop sign-in name. `None` uses the SSH user.
+    pub rd_user: Option<String>,
+    /// Preferred remote desktop method. `None` chooses automatically.
+    pub rd_method: Option<String>,
 }
 
 /// Validated, user-editable profile fields.
@@ -96,6 +101,8 @@ pub struct ProfileFields {
     pub tags: Vec<String>,
     pub mac: Option<String>,
     pub reuse_password: Option<bool>,
+    pub rd_user: Option<String>,
+    pub rd_method: Option<Method>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -107,6 +114,7 @@ pub struct Profile {
     pub favorite: bool,
     pub legacy_crypto: bool,
     pub has_saved_secret: bool,
+    pub has_saved_desktop_secret: bool,
     pub last_used_at: Option<i64>,
 }
 
@@ -189,6 +197,23 @@ impl ProfileDraft {
         let color = one_of(self.color.as_deref(), COLORS, "color", &mut errs);
         let icon = one_of(self.icon.as_deref(), ICONS, "icon", &mut errs);
         let group_id = text(self.group_id.as_deref(), 64, "groupId", &mut errs);
+        let rd_user = self.rd_user.as_deref().map(str::trim).filter(|u| !u.is_empty()).and_then(|u| {
+            let v = crate::desktop::sign_in_name(u);
+            if v.is_none() {
+                errs.push(FieldError {
+                    field: "rdUser",
+                    message: "Use a user name such as alice, DOMAIN\\alice or alice@example.com.".into(),
+                });
+            }
+            v
+        });
+        let rd_method = self.rd_method.as_deref().filter(|m| !m.is_empty()).and_then(|m| {
+            let v = Method::parse(m);
+            if v.is_none() {
+                errs.push(FieldError { field: "rdMethod", message: "Choose one of the listed options.".into() });
+            }
+            v
+        });
 
         let mut tags: Vec<String> = Vec::new();
         for t in &self.tags {
@@ -222,6 +247,8 @@ impl ProfileDraft {
             tags,
             mac: mac.ok().flatten(),
             reuse_password: self.reuse_password,
+            rd_user,
+            rd_method,
         })
     }
 }
@@ -231,7 +258,8 @@ fn jump_spec(jump: &[JumpHop]) -> Option<String> {
 }
 
 const COLUMNS: &str = "id, name, host, port, username, group_id, auth, identity_file, jump, start_dir, keepalive_secs,
-     terminal_theme, color, icon, favorite, legacy_crypto, secret_ref, last_used_at, mac, reuse_password";
+     terminal_theme, color, icon, favorite, legacy_crypto, secret_ref, last_used_at, mac, reuse_password,
+     rd_user, rd_method, rd_secret_ref";
 
 /// Rows were validated on write; re-validate on read so a tampered database
 /// can't smuggle unvalidated hosts or users into `ssh` arguments.
@@ -253,6 +281,8 @@ fn from_row(r: &Row) -> rusqlite::Result<Option<Profile>> {
         tags: Vec::new(),
         mac: r.get(18)?,
         reuse_password: r.get(19)?,
+        rd_user: r.get(20)?,
+        rd_method: r.get(21)?,
     };
     let id: String = r.get(0)?;
     let Ok(fields) = draft.validate() else {
@@ -265,6 +295,7 @@ fn from_row(r: &Row) -> rusqlite::Result<Option<Profile>> {
         favorite: r.get(14)?,
         legacy_crypto: r.get(15)?,
         has_saved_secret: r.get::<_, Option<String>>(16)?.is_some(),
+        has_saved_desktop_secret: r.get::<_, Option<String>>(22)?.is_some(),
         last_used_at: r.get(17)?,
     }))
 }
@@ -321,8 +352,8 @@ pub fn create(conn: &mut Connection, draft: &ProfileDraft) -> Result<Profile> {
     let tx = conn.transaction()?;
     tx.execute(
         "INSERT INTO profiles (id, name, host, port, username, group_id, auth, identity_file, jump, start_dir,
-             keepalive_secs, terminal_theme, color, icon, mac, reuse_password, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?16, ?17, ?15, ?15)",
+             keepalive_secs, terminal_theme, color, icon, mac, reuse_password, rd_user, rd_method, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?16, ?17, ?18, ?19, ?15, ?15)",
         params![
             id,
             f.name,
@@ -340,7 +371,9 @@ pub fn create(conn: &mut Connection, draft: &ProfileDraft) -> Result<Profile> {
             f.icon,
             now(),
             f.mac,
-            f.reuse_password
+            f.reuse_password,
+            f.rd_user,
+            f.rd_method.map(Method::as_str)
         ],
     )?;
     write_tags(&tx, &id, &f.tags)?;
@@ -355,7 +388,7 @@ pub fn update(conn: &mut Connection, id: &str, draft: &ProfileDraft) -> Result<P
     let n = tx.execute(
         "UPDATE profiles SET name = ?2, host = ?3, port = ?4, username = ?5, group_id = ?6, auth = ?7,
              identity_file = ?8, jump = ?9, start_dir = ?10, keepalive_secs = ?11, terminal_theme = ?12,
-             color = ?13, icon = ?14, updated_at = ?15, mac = ?16, reuse_password = ?17
+             color = ?13, icon = ?14, updated_at = ?15, mac = ?16, reuse_password = ?17, rd_user = ?18, rd_method = ?19
          WHERE id = ?1",
         params![
             id,
@@ -374,7 +407,9 @@ pub fn update(conn: &mut Connection, id: &str, draft: &ProfileDraft) -> Result<P
             f.icon,
             now(),
             f.mac,
-            f.reuse_password
+            f.reuse_password,
+            f.rd_user,
+            f.rd_method.map(Method::as_str)
         ],
     )?;
     if n == 0 {
@@ -385,14 +420,19 @@ pub fn update(conn: &mut Connection, id: &str, draft: &ProfileDraft) -> Result<P
     get(conn, id)
 }
 
-/// Deletes the profile and returns its secret reference, which the caller must
-/// remove from the credential store.
-pub fn delete(conn: &Connection, id: &str) -> Result<Option<String>> {
-    let secret_ref: Option<Option<String>> =
-        conn.query_row("SELECT secret_ref FROM profiles WHERE id = ?1", [id], |r| r.get(0)).optional()?;
-    let secret_ref = secret_ref.ok_or(ProfileError::NotFound)?;
+/// Deletes the profile and returns the credential store ids of its saved
+/// passwords (SSH and remote desktop), which the caller must remove.
+pub fn delete(conn: &Connection, id: &str) -> Result<Vec<String>> {
+    let refs: Option<(Option<String>, Option<String>)> =
+        conn.query_row("SELECT secret_ref, rd_secret_ref FROM profiles WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+    let (ssh, desktop) = refs.ok_or(ProfileError::NotFound)?;
     conn.execute("DELETE FROM profiles WHERE id = ?1", [id])?;
-    Ok(secret_ref)
+    Ok(ssh.into_iter().chain(desktop.iter().flat_map(|d| desktop_secret_ids(d))).collect())
+}
+
+/// Both remote desktop password ids under a profile's reference.
+pub fn desktop_secret_ids(base: &str) -> [String; 2] {
+    [crate::security::desktop_secret_id(base, false), crate::security::desktop_secret_id(base, true)]
 }
 
 fn update_one(conn: &Connection, sql: &str, params: impl rusqlite::Params) -> Result<()> {
@@ -427,6 +467,15 @@ pub fn secret_ref(conn: &Connection, id: &str) -> Result<Option<String>> {
 
 pub fn set_secret_ref(conn: &Connection, id: &str, secret_ref: Option<&str>) -> Result<()> {
     update_one(conn, "UPDATE profiles SET secret_ref = ?2 WHERE id = ?1", params![id, secret_ref])
+}
+
+/// The remote desktop password's reference (kept apart from the SSH password).
+pub fn desktop_secret_ref(conn: &Connection, id: &str) -> Result<Option<String>> {
+    conn.query_row("SELECT rd_secret_ref FROM profiles WHERE id = ?1", [id], |r| r.get(0)).optional()?.ok_or(ProfileError::NotFound)
+}
+
+pub fn set_desktop_secret_ref(conn: &Connection, id: &str, secret_ref: Option<&str>) -> Result<()> {
+    update_one(conn, "UPDATE profiles SET rd_secret_ref = ?2 WHERE id = ?1", params![id, secret_ref])
 }
 
 // ---- folders ----
@@ -495,6 +544,8 @@ mod tests {
             icon: Some("<script>".into()),
             tags: vec!["line\nbreak".into()],
             mac: Some("not-a-mac".into()),
+            rd_user: Some("a;b".into()),
+            rd_method: Some("telnet".into()),
             ..Default::default()
         };
         let errs = bad.validate().unwrap_err();
@@ -503,7 +554,22 @@ mod tests {
         fields.dedup();
         assert_eq!(
             fields,
-            ["color", "host", "icon", "identityFile", "jump", "keepaliveSecs", "mac", "name", "port", "startDir", "tags", "username"]
+            [
+                "color",
+                "host",
+                "icon",
+                "identityFile",
+                "jump",
+                "keepaliveSecs",
+                "mac",
+                "name",
+                "port",
+                "rdMethod",
+                "rdUser",
+                "startDir",
+                "tags",
+                "username"
+            ]
         );
     }
 
@@ -520,8 +586,11 @@ mod tests {
         d.color = Some("teal".into());
         d.mac = Some("B8-27-EB-12-34-56".into());
         d.reuse_password = Some(false);
+        d.rd_user = Some("CORP\\admin".into());
+        d.rd_method = Some("rdp".into());
 
         let p = create(&mut conn, &d).unwrap();
+        assert_eq!((p.fields.rd_user.as_deref(), p.fields.rd_method), (Some("CORP\\admin"), Some(Method::Rdp)));
         assert_eq!(p.fields.port, Some(2222));
         assert_eq!(p.fields.tags, ["lab", "storage"]);
         assert_eq!(p.fields.jump[0].to_spec(), "ops@bastion:22");
@@ -541,7 +610,9 @@ mod tests {
         assert_eq!(listed[0].fields.group_id, None, "folder deletion keeps the connection");
 
         set_secret_ref(&conn, &p.id, Some("ref-1")).unwrap();
-        assert_eq!(delete(&conn, &p.id).unwrap(), Some("ref-1".into()));
+        set_desktop_secret_ref(&conn, &p.id, Some("ref-2")).unwrap();
+        assert!(get(&conn, &p.id).unwrap().has_saved_desktop_secret);
+        assert_eq!(delete(&conn, &p.id).unwrap(), ["ref-1", "ref-2:vnc", "ref-2:account"]);
         assert!(matches!(get(&conn, &p.id), Err(ProfileError::NotFound)));
         assert!(matches!(update(&mut conn, "nope", &draft("x", "x")), Err(ProfileError::NotFound)));
     }

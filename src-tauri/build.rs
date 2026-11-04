@@ -80,6 +80,15 @@ const COMMANDS: &[&str] = &[
     "list_networks",
     "scan_network",
     "cancel_scan",
+    "desktop_probe",
+    "desktop_open",
+    "desktop_write",
+    "desktop_ack",
+    "desktop_input",
+    "desktop_resize",
+    "desktop_clipboard",
+    "desktop_close",
+    "desktop_end_virtual",
 ];
 
 /// Core and plugin permissions the webview needs. No shell, fs or http access.

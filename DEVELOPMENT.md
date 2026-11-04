@@ -73,6 +73,12 @@ upload/download interrupted and resumed with SHA-256 verification, atomic editor
 saves, local and SOCKS tunnels, folder transfers with conflict resolution, automatic
 reconnect with saved-password reuse, key generation and passphrase changes.
 
+`desktop_it` runs against `tests/desktop` (sshd plus Xvfb, headless Sway, TigerVNC and
+xrdp). It covers detection, X11 and Wayland screen sharing, virtual desktops across
+dropped connections, VNC passwords, RDP over TLS with input and resize, a legacy-only
+RDP server being refused, and forwarding errors. The end-to-end test uses the same
+image. See [REMOTE_DESKTOP.md](REMOTE_DESKTOP.md) for what is tested where.
+
 Before sending changes:
 
 ```sh

@@ -9,7 +9,7 @@ use rusqlite::Connection;
 pub use rusqlite;
 
 /// Append-only: never edit a shipped migration, add a new one.
-const MIGRATIONS: &[&str] = &[include_str!("001_init.sql"), include_str!("002_devices.sql")];
+const MIGRATIONS: &[&str] = &[include_str!("001_init.sql"), include_str!("002_devices.sql"), include_str!("003_remote_desktop.sql")];
 
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {

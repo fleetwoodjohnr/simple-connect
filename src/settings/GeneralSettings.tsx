@@ -125,3 +125,51 @@ export function ConnectionSettings() {
     </Section>
   );
 }
+
+export function DesktopSettings() {
+  const { settings, save } = useSettings();
+  const d = settings.remoteDesktop;
+  const set = (patch: Partial<typeof d>) => void save({ remoteDesktop: { ...d, ...patch } });
+  return (
+    <Section title="Remote desktop">
+      <Choice
+        label="Image quality"
+        hint="Automatic picks from the connection's latency. You can change it while connected."
+        value={d.quality}
+        onChange={(quality) => set({ quality })}
+        options={[
+          { value: "auto", label: "Automatic" },
+          { value: "high", label: "High" },
+          { value: "balanced", label: "Balanced" },
+          { value: "low", label: "Low bandwidth" },
+        ]}
+      />
+      <Choice
+        label="Scaling"
+        value={d.scale}
+        onChange={(scale) => set({ scale })}
+        options={[
+          { value: "fit", label: "Fit to window" },
+          { value: "actual", label: "Actual size" },
+          { value: "remote", label: "Resize remote desktop" },
+        ]}
+      />
+      <Toggle
+        label="Share the clipboard automatically"
+        hint="Copies what you copy on the remote computer, and sends your clipboard when you click into the desktop. When off, use the clipboard menu."
+        checked={d.clipboardSync}
+        onChange={(clipboardSync) => set({ clipboardSync })}
+      />
+      <Row label="Upload dropped files to" hint="A folder in your home folder on the remote computer. Empty means the home folder itself.">
+        <input
+          key={d.uploadDir}
+          className={`${inputClass} w-48`}
+          defaultValue={d.uploadDir}
+          placeholder="Home folder"
+          aria-label="Upload folder"
+          onBlur={(e) => e.target.value !== d.uploadDir && set({ uploadDir: e.target.value })}
+        />
+      </Row>
+    </Section>
+  );
+}

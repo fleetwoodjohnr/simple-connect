@@ -48,7 +48,7 @@ export function TerminalPane({ tab, visible }: { tab: SessionTab; visible: boole
       <div className="relative min-h-0 flex-1">
         {tab.terminals.map((t) => (
           <div key={t.key} className="absolute inset-0" hidden={tab.activeTerminal !== t.key}>
-            <TerminalView session={tab.id} connected={connected} visible={visible && tab.activeTerminal === t.key} />
+            <TerminalView session={tab.id} connected={connected} visible={visible && tab.activeTerminal === t.key} recipe={t.recipe} />
           </div>
         ))}
       </div>

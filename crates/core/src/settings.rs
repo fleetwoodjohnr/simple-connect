@@ -41,6 +41,37 @@ impl Default for TerminalSettings {
     }
 }
 
+/// How the remote screen fits the view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DesktopScale {
+    /// Scaled to fit the window.
+    #[default]
+    Fit,
+    /// One remote pixel per screen pixel, scrolled.
+    Actual,
+    /// The remote desktop is resized to the window where the server allows it.
+    Remote,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DesktopSettings {
+    pub quality: crate::desktop::Quality,
+    pub scale: DesktopScale,
+    /// Copy the remote clipboard automatically and send the local one on focus.
+    /// Off by default: clipboard contents move only when the user asks.
+    pub clipboard_sync: bool,
+    /// Where dropped files go, relative to the remote home folder.
+    pub upload_dir: String,
+}
+
+impl Default for DesktopSettings {
+    fn default() -> Self {
+        Self { quality: crate::desktop::Quality::Auto, scale: DesktopScale::Fit, clipboard_sync: false, upload_dir: "Desktop".into() }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
@@ -64,6 +95,7 @@ pub struct Settings {
     /// Offer the SSH login password at sudo/su prompts (sent only on Enter).
     pub reuse_ssh_password: bool,
     pub terminal: TerminalSettings,
+    pub remote_desktop: DesktopSettings,
 }
 
 impl Default for Settings {
@@ -84,6 +116,7 @@ impl Default for Settings {
             show_hidden_files: false,
             reuse_ssh_password: true,
             terminal: TerminalSettings::default(),
+            remote_desktop: DesktopSettings::default(),
         }
     }
 }
@@ -106,6 +139,10 @@ impl Settings {
         t.scrollback = t.scrollback.clamp(500, 200_000);
         t.font_family = t.font_family.chars().filter(|c| c.is_alphanumeric() || " -_,'\"".contains(*c)).take(120).collect();
         t.theme = t.theme.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(32).collect();
+        // A folder under the remote home: no absolute paths, no "..".
+        let d = &mut self.remote_desktop;
+        let dir: String = d.upload_dir.trim().trim_matches('/').chars().filter(|c| !c.is_control()).take(200).collect();
+        d.upload_dir = if dir.split('/').any(|c| c == ".." || c == ".") { String::new() } else { dir };
         self
     }
 
@@ -126,8 +163,14 @@ mod tests {
     fn defaults_are_secure_and_values_are_clamped() {
         let d = Settings::default();
         assert!(d.verify_checksums && !d.write_user_known_hosts && d.lock_on_sleep);
+        assert!(!d.remote_desktop.clipboard_sync, "clipboards move only on request by default");
         let wild = Settings { connect_timeout_secs: 0, clipboard_clear_secs: 7, editor_max_mb: 10_000, ..Settings::default() }.sanitized();
         assert_eq!((wild.connect_timeout_secs, wild.clipboard_clear_secs, wild.editor_max_mb), (3, 30, 100));
+        for (dir, want) in [("/Desktop/", "Desktop"), ("../../etc", ""), ("a/./b", ""), ("Uploads/in", "Uploads/in")] {
+            let mut s = Settings::default();
+            s.remote_desktop.upload_dir = dir.into();
+            assert_eq!(s.sanitized().remote_desktop.upload_dir, want, "{dir}");
+        }
 
         let conn = crate::storage::open_in_memory().unwrap();
         assert_eq!(Settings::load(&conn), d);

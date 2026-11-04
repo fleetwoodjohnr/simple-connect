@@ -3,6 +3,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 pub mod app;
+pub mod desktop;
 pub mod discovery;
 pub mod logging;
 pub mod paths;
