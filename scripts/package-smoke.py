@@ -87,8 +87,11 @@ def launch(command, profile, logs, *, extra_env=None):
 
 
 def digest(path):
+    checksum = hashlib.sha256()
     with Path(path).open('rb') as source:
-        return hashlib.file_digest(source, 'sha256').hexdigest()
+        while chunk := source.read(1024 * 1024):
+            checksum.update(chunk)
+    return checksum.hexdigest()
 
 
 @contextmanager
