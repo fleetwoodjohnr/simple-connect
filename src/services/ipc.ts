@@ -41,6 +41,7 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
 }
 
 export const api = {
+  prepareUpdateInstall: () => call<void>("prepare_update_install"),
   appInfo: () => call<AppInfo>("app_info"),
   parseQuickConnect: (input: string) => call<QuickConnect>("parse_quick_connect", { input }),
   getSettings: () => call<Settings>("get_settings"),

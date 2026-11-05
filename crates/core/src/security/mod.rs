@@ -50,9 +50,8 @@ pub fn passphrase_ref(key_path: &std::path::Path) -> String {
 
 const SERVICE: &str = "dev.simpleconnect.client";
 
-/// OS keyring: Secret Service (GNOME Keyring, KWallet) on Linux. Windows
-/// Credential Manager and macOS Keychain plug in here through their
-/// keyring-core stores with the Windows/macOS ports.
+/// OS keyring: Secret Service on Linux, Credential Manager on Windows, and
+/// Keychain on macOS. All backends share the same service and secret references.
 pub struct KeyringStore;
 
 impl KeyringStore {
@@ -64,12 +63,30 @@ impl KeyringStore {
             keyring_core::set_default_store(store);
             Ok(KeyringStore)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "windows")]
+        {
+            let store = windows_native_keyring_store::Store::new().map_err(|e| SecretError::Keyring(e.to_string()))?;
+            keyring_core::set_default_store(store);
+            Ok(KeyringStore)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let store = apple_native_keyring_store::keychain::Store::new().map_err(|e| SecretError::Keyring(e.to_string()))?;
+            keyring_core::set_default_store(store);
+            Ok(KeyringStore)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
         Err(SecretError::Keyring("no keyring backend for this platform yet".into()))
     }
 
     fn entry(id: &str) -> Result<keyring_core::Entry, SecretError> {
-        keyring_core::Entry::new(SERVICE, id).map_err(|e| SecretError::Keyring(e.to_string()))
+        // Keep Windows credentials on this computer rather than allowing the
+        // platform backend's default Enterprise persistence to roam them.
+        #[cfg(target_os = "windows")]
+        let entry = keyring_core::Entry::new_with_modifiers(SERVICE, id, &HashMap::from([("persistence", "Local")]));
+        #[cfg(not(target_os = "windows"))]
+        let entry = keyring_core::Entry::new(SERVICE, id);
+        entry.map_err(|e| SecretError::Keyring(e.to_string()))
     }
 }
 
@@ -122,9 +139,9 @@ mod tests {
         assert_ne!(new_password_ref(), new_password_ref());
     }
 
-    /// Exercises the real Secret Service when available (developer desktops).
+    /// Exercises the platform's real credential store (developer desktops).
     #[test]
-    #[ignore = "needs a running Secret Service"]
+    #[ignore = "needs an unlocked platform credential store"]
     fn keyring_roundtrip() {
         let store = KeyringStore::connect().unwrap();
         let id = format!("test:{}", uuid::Uuid::new_v4());

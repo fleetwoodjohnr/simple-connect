@@ -125,6 +125,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "apple-native-keyring-store"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b350bfd03649e07aa05c0a81b3e15934374e585c98204a57e20b9d49f49bb9a"
+dependencies = [
+ "keyring-core",
+ "log",
+ "security-framework",
+]
+
+[[package]]
 name = "arbitrary"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5562,8 +5573,10 @@ name = "simple-connect-core"
 version = "0.1.0"
 dependencies = [
  "aes 0.8.4",
+ "apple-native-keyring-store",
  "argon2",
  "base64 0.22.1",
+ "block2",
  "bytes",
  "chacha20poly1305",
  "des 0.8.1",
@@ -5587,6 +5600,8 @@ dependencies = [
  "keyring-core",
  "md-5 0.10.6",
  "num-bigint 0.4.8",
+ "objc2-app-kit",
+ "objc2-foundation",
  "openssh-sftp-client",
  "portable-pty",
  "regex",
@@ -5605,6 +5620,8 @@ dependencies = [
  "tracing-subscriber",
  "trash",
  "uuid",
+ "windows-native-keyring-store",
+ "windows-sys 0.61.2",
  "x509-cert",
  "zbus",
  "zbus-secret-service-keyring-store",
@@ -7456,6 +7473,19 @@ name = "windows-link"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
+
+[[package]]
+name = "windows-native-keyring-store"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "063426e76fdec7438d56bb777f67e318a84a25c707b07e575cb8b78e10c028f8"
+dependencies = [
+ "byteorder",
+ "keyring-core",
+ "regex",
+ "windows-sys 0.61.2",
+ "zeroize",
+]
 
 [[package]]
 name = "windows-numerics"

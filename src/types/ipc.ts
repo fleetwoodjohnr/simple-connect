@@ -312,6 +312,7 @@ export interface TerminalSettings {
 }
 
 export interface Settings {
+  autoCheckUpdates: boolean;
   autoReconnect: boolean;
   includeUserSshConfig: boolean;
   keepaliveSecs: number;

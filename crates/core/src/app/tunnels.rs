@@ -82,6 +82,9 @@ pub struct Registry {
 
 async fn control(m: &Manager, s: &Session, op: &str, flag: &str, arg: &str) -> Result<(), String> {
     let master = s.master().ok_or("Not connected.")?;
+    if cfg!(windows) {
+        return master.forward(&m.engine.ossh, &s.req.dest, op, flag, arg).await;
+    }
     let mut args = master.client_args(&s.req.dest);
     // The generated config clears forwardings by default; this request is explicit.
     args.extend(["-o".into(), "ClearAllForwardings=no".into(), "-O".into(), op.into(), flag.into(), arg.into()]);
@@ -116,6 +119,9 @@ impl Registry {
             map.entry(session.into()).or_default().push(t.clone());
         }
         self.emit(m, session);
+        if cfg!(windows) {
+            self.watch_forward(m, session, &t);
+        }
         Ok(t)
     }
 
@@ -149,12 +155,46 @@ impl Registry {
             };
             t.active = res.is_ok();
             t.error = res.err();
+            if cfg!(windows) && t.active {
+                self.watch_forward(m, &s.id, &t);
+            }
             updated.push(t);
         }
         if let Ok(mut map) = self.tunnels.lock() {
             map.insert(s.id.clone(), updated);
         }
         self.emit(m, &s.id);
+    }
+
+    fn watch_forward(&self, m: &Arc<Manager>, session: &str, tunnel: &Tunnel) {
+        let manager = Arc::downgrade(m);
+        let session = session.to_owned();
+        let id = tunnel.id.clone();
+        let spec = tunnel.spec.clone();
+        let original = m.session(&session).ok().and_then(|s| s.master());
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                let Some(m) = manager.upgrade() else { return };
+                let Ok(s) = m.session(&session) else { return };
+                let Some(master) = s.master() else { return };
+                if !original.as_ref().is_some_and(|old| Arc::ptr_eq(old, &master)) {
+                    return;
+                }
+                let Ok((flag, arg)) = spec.to_arg() else { return };
+                if master.forward_is_alive(flag, &arg).await {
+                    continue;
+                }
+                if let Ok(mut map) = m.tunnels.tunnels.lock()
+                    && let Some(t) = map.get_mut(&session).and_then(|list| list.iter_mut().find(|t| t.id == id))
+                {
+                    t.active = false;
+                    t.error = Some("The forwarding connection ended.".into());
+                }
+                m.tunnels.emit(&m, &session);
+                return;
+            }
+        });
     }
 
     pub fn mark_inactive(&self, m: &Manager, session: &str) {

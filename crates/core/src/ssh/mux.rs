@@ -41,7 +41,7 @@ impl Destination {
     }
 
     fn auth_args(&self, out: &mut Vec<OsString>) {
-        if !self.jump.is_empty() {
+        if !cfg!(windows) && !self.jump.is_empty() {
             let spec = self.jump.iter().map(JumpHop::to_spec).collect::<Vec<_>>().join(",");
             out.extend(["-J".into(), spec.into()]);
         }
@@ -131,6 +131,8 @@ pub struct Master {
     pub socket: PathBuf,
     pub config: PathBuf,
     pub info: SecurityInfo,
+    pub env: Vec<(String, String)>,
+    forwards: tokio::sync::Mutex<std::collections::HashMap<String, Child>>,
     child: Arc<tokio::sync::Mutex<Child>>,
     /// Recent stderr (debug lines included), for diagnosing a later disconnect.
     log: Arc<Mutex<LogBuf>>,
@@ -168,6 +170,14 @@ pub async fn start(
     spec.dest.auth_args(&mut args);
     args.extend(["--".into(), spec.dest.host.as_str().into()]);
 
+    if cfg!(windows) {
+        args = vec!["-F".into(), spec.config.into(), "-N".into(), "-v".into()];
+        spec.dest.target_args(&mut args);
+        spec.dest.auth_args(&mut args);
+        args.extend(["--".into(), spec.dest.host.as_str().into()]);
+    }
+    let env = spec.env.clone();
+    let authenticated = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let _ = std::fs::remove_file(spec.socket);
     let mut child = Command::new(&spec.ossh.ssh)
         .args(&args)
@@ -193,10 +203,13 @@ pub async fn start(
     // Stderr reader: feeds the log and security info for the master's lifetime.
     let on_phase = Arc::new(on_phase);
     {
-        let (log, info, on_phase) = (log.clone(), info.clone(), on_phase.clone());
+        let (log, info, on_phase, authenticated) = (log.clone(), info.clone(), on_phase.clone(), authenticated.clone());
         tokio::spawn(async move {
             let mut lines = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = lines.next_line().await {
+                if line.starts_with("Authenticated to ") {
+                    authenticated.store(true, std::sync::atomic::Ordering::Release);
+                }
                 let update = info.lock().ok().and_then(|mut i| i.parse_line(&line).map(|p| (p, i.clone())));
                 if let Some((phase, snapshot)) = update {
                     on_phase(phase, &snapshot);
@@ -221,10 +234,19 @@ pub async fn start(
 
     let mut exit_rx = exited.clone();
     loop {
-        if spec.socket.exists() {
+        if (!cfg!(windows) && spec.socket.exists()) || (cfg!(windows) && authenticated.load(std::sync::atomic::Ordering::Acquire)) {
             let info = info.lock().map(|i| i.clone()).unwrap_or_default();
             on_phase(Phase::Connected, &info);
-            return Ok(Master { socket: spec.socket.into(), config: spec.config.into(), info, child, log, exited });
+            return Ok(Master {
+                socket: spec.socket.into(),
+                config: spec.config.into(),
+                info,
+                env,
+                forwards: Default::default(),
+                child,
+                log,
+                exited,
+            });
         }
         tokio::select! {
             _ = exit_rx.changed() => {
@@ -239,6 +261,10 @@ pub async fn start(
 }
 
 impl Master {
+    pub fn exit_signal(&self) -> watch::Receiver<bool> {
+        self.exited.clone()
+    }
+
     /// Resolves when the connection ends.
     pub async fn closed(&self) {
         let mut rx = self.exited.clone();
@@ -278,12 +304,76 @@ impl Master {
     /// Arguments for a multiplexed client through this master (no re-authentication).
     pub fn client_args(&self, dest: &Destination) -> Vec<OsString> {
         let mut args: Vec<OsString> = vec!["-F".into(), self.config.clone().into(), "-S".into(), self.socket.clone().into()];
+        if cfg!(windows) {
+            args = vec!["-F".into(), self.config.clone().into()];
+            dest.auth_args(&mut args);
+        }
         dest.target_args(&mut args);
         args
     }
 
+    /// Windows has no ControlMaster: each explicit forwarding owns a process.
+    pub async fn forward(&self, ossh: &OpenSsh, dest: &Destination, op: &str, flag: &str, arg: &str) -> Result<(), String> {
+        let key = format!("{flag}:{arg}");
+        if op == "cancel" {
+            self.forwards.lock().await.remove(&key);
+            return Ok(());
+        }
+        let mut args = self.client_args(dest);
+        args.extend([
+            "-N".into(),
+            "-v".into(),
+            "-o".into(),
+            "ExitOnForwardFailure=yes".into(),
+            "-o".into(),
+            "ClearAllForwardings=no".into(),
+            flag.into(),
+            arg.into(),
+            "--".into(),
+            dest.host.as_str().into(),
+        ]);
+        let mut child = Command::new(&ossh.ssh)
+            .args(args)
+            .envs(self.env.clone())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        let stderr = child.stderr.take().ok_or("No SSH error stream")?;
+        let mut lines = BufReader::new(stderr).lines();
+        tokio::time::timeout(Duration::from_secs(300), async {
+            let mut recent = String::new();
+            while let Some(line) = lines.next_line().await.map_err(|e| e.to_string())? {
+                if (flag == "-R" && line.contains("remote forward success"))
+                    || (flag != "-R" && line.contains("Entering interactive session"))
+                {
+                    return Ok(());
+                }
+                if recent.len() < 8192 {
+                    recent.push_str(&line);
+                    recent.push('\n');
+                }
+            }
+            Err(recent)
+        })
+        .await
+        .map_err(|_| "Forwarding timed out".to_owned())??;
+        // Drain debug output for the process lifetime, avoiding pipe backpressure.
+        tokio::spawn(async move { while let Ok(Some(_)) = lines.next_line().await {} });
+        self.forwards.lock().await.insert(key, child);
+        Ok(())
+    }
+
+    pub async fn forward_is_alive(&self, flag: &str, arg: &str) -> bool {
+        let mut forwards = self.forwards.lock().await;
+        forwards.get_mut(&format!("{flag}:{arg}")).is_some_and(|child| matches!(child.try_wait(), Ok(None)))
+    }
+
     /// Ends the connection and removes the socket and generated config.
     pub async fn close(&self) {
+        self.forwards.lock().await.clear();
         let mut child = self.child.lock().await;
         let _ = child.start_kill();
         let _ = child.wait().await;
@@ -363,23 +453,12 @@ mod tests {
         dest.target_args(&mut args);
         dest.auth_args(&mut args);
         let args: Vec<String> = args.into_iter().map(|a| a.into_string().unwrap()).collect();
-        assert_eq!(
-            args,
-            [
-                "-p",
-                "2222",
-                "-l",
-                "deploy",
-                "-J",
-                "ops@bastion:22",
-                "-i",
-                "/home/u/.ssh/id_ed25519",
-                "-o",
-                "IdentitiesOnly=yes",
-                "-o",
-                "PreferredAuthentications=publickey"
-            ]
-        );
+        let mut expected = vec!["-p", "2222", "-l", "deploy"];
+        if !cfg!(windows) {
+            expected.extend(["-J", "ops@bastion:22"]);
+        }
+        expected.extend(["-i", "/home/u/.ssh/id_ed25519", "-o", "IdentitiesOnly=yes", "-o", "PreferredAuthentications=publickey"]);
+        assert_eq!(args, expected);
         assert_eq!(dest.label(), "deploy@example.com:2222");
     }
 }

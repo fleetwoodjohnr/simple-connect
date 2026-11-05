@@ -24,32 +24,27 @@ Release builds use LTO, a single codegen unit, `panic = "abort"` and stripped sy
 
 ## Signed updates
 
-The in-app updater (Tauri updater plugin) only installs updates whose minisign
-signature matches the public key compiled into the app. The repository ships a
-placeholder key, so **all updates are rejected until you configure your own**:
+The in-app updater only installs packages whose minisign signature matches the release
+public key compiled into the application. The endpoint is the public GitHub Releases
+`latest.json`; no account or update server is required.
 
-1. Generate a key pair once, and keep the private key offline (never commit it):
+Automatic checks run after settings load at startup and once every 24 hours while the
+application is open. Disable them in Settings → About, where **Check now** remains
+available. Updates download only after **Install and restart** is selected. Close
+connection tabs, save unsaved files, and finish or cancel pending transfers before
+installing. Downloads are verified before installation; offline checks and failed
+installations leave the application usable.
 
-   ```sh
-   npm run tauri signer generate -- -w ~/.tauri/simple-connect.key
-   ```
+Updates preserve the installed format: NSIS on Windows, application bundles on macOS,
+and AppImage, DEB, or RPM on Linux. DEB/RPM installation may require administrator
+approval. Windows installers restart the app; macOS/Linux relaunch after installation.
+Update signing is separate from OS publisher signing: macOS builds use ad-hoc signatures
+and Windows installers currently show an unknown-publisher prompt.
 
-2. Put the printed public key in `src-tauri/tauri.conf.json` → `plugins.updater.pubkey`,
-   and set `plugins.updater.endpoints` to the HTTPS URL of your `latest.json`
-   (for GitHub releases: `https://github.com/<owner>/<repo>/releases/latest/download/latest.json`).
-
-3. Enable updater artifacts in `tauri.conf.json` → `bundle.createUpdaterArtifacts: true`,
-   then build with the key available only in the build environment:
-
-   ```sh
-   TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/simple-connect.key)" \
-   TAURI_SIGNING_PRIVATE_KEY_PASSWORD=… npm run tauri build
-   ```
-
-4. Publish the AppImage, its `.sig` file and a `latest.json` describing them.
-
-HTTP endpoints are refused by the updater. Distribution packages (deb/rpm) are normally
-updated by the system package manager rather than the in-app updater.
+For local signed builds, provide `TAURI_SIGNING_PRIVATE_KEY` (the private key file path
+or contents) and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, then run `npm run tauri build`.
+Never commit the private key or regenerate it for each release. See the release guide
+below for CI secrets, backup requirements, and publication checks.
 
 ## Release checklist
 
@@ -70,7 +65,38 @@ core features are stable.
 
 ## Other platforms
 
-The SSH engine, storage and UI are cross-platform. Windows needs a named-pipe helper
-transport, the Windows Credential Manager store and one `ssh` per view (Win32-OpenSSH has
-no ControlMaster); macOS needs the Keychain store and a short runtime-socket path.
-These seams are marked `ponytail:` in the code.
+Windows ships a pinned OpenSSH client and uses independent SSH processes because
+Win32-OpenSSH does not support ControlMaster. Additional channels can require additional
+MFA prompts. Its prompt helper uses restricted named pipes and saved credentials use
+Windows Credential Manager. macOS uses Keychain and short private runtime socket paths.
+The encrypted vault remains available when the native credential store cannot be used.
+
+## v0.1.0 cross-platform releases
+
+Platform configuration is merged automatically by the Tauri CLI: Linux produces DEB,
+RPM and AppImage, Windows produces per-user NSIS installers, and macOS produces DMG
+and application archives. Both x86_64 and aarch64 builds run on native GitHub runners.
+Windows preparation runs `scripts/windows-openssh.ps1 -Architecture x86_64` (or
+`aarch64`) under PowerShell. It verifies pinned upstream archive checksums and bundles
+only client executables, libraries, and notices. Never install the upstream SSH server
+service as part of application packaging.
+
+Updater signing is enabled. The public key is committed in tauri.conf.json. The matching
+private key backup is in the ignored `.release-keys/` directory on the release machine;
+keep an additional offline backup. Do not delete or rotate this key casually: installed
+clients trust it. GitHub Actions uses `TAURI_SIGNING_PRIVATE_KEY` and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secrets. Never expose them to pull-request jobs.
+
+Run the Release workflow manually for an unpublished six-target rehearsal. Tag a
+validated commit `vMAJOR.MINOR.PATCH` after synchronizing the npm, Cargo workspace,
+and Tauri versions. The tag run checks signatures and all ten updater target entries,
+then uploads a draft release and publishes only after all files are present. Artifacts
+and signatures must not be renamed or modified after manifest generation. If publishing
+is interrupted, inspect the draft before retrying; the workflow never overwrites a
+published release. Withdraw a faulty release from latest, then publish a higher patch
+version with the same key. Automatic downgrades are disabled.
+
+`node --test scripts/release-manifest.node.mjs` tests signature rejection and manifest
+coverage. `node scripts/check-version.mjs` checks release versions. A final validation
+must install packages on each native platform and prove an older isolated test build
+updates to the candidate; never publish that test version to the public feed.

@@ -61,11 +61,52 @@ pub struct UnsafePath(pub String);
 /// options and splits on quotes, so paths containing `% $ " ' \` or control
 /// characters are refused rather than escaped.
 pub fn quote_path(p: &Path) -> Result<String, UnsafePath> {
-    let s = p.to_str().ok_or_else(|| UnsafePath(p.display().to_string()))?;
+    let native = p.to_str().ok_or_else(|| UnsafePath(p.display().to_string()))?;
+    let normalized = if cfg!(windows) { native.replace('\\', "/") } else { native.to_owned() };
+    let s = normalized.as_str();
     if s.chars().any(|c| matches!(c, '%' | '$' | '"' | '\'' | '\\') || c.is_control()) {
         return Err(UnsafePath(s.to_owned()));
     }
     Ok(format!("\"{s}\""))
+}
+
+/// Explicit Windows proxy chain. Command-line tags distinguish each hop while
+/// retaining the original host name for the user's ssh_config Host aliases.
+/// Native Win32 OpenSSH lacks multiplexing and its implicit -J command leaves
+/// -F paths unquoted. Its bundled version supports -P/Match tagged (OpenSSH 9.4+).
+pub fn windows_route(ossh: &OpenSsh, config: &Path, dest: &super::mux::Destination, route: &str) -> Result<String, UnsafePath> {
+    if dest.jump.is_empty() {
+        return Ok(String::new());
+    }
+    // Tags are local generated identifiers, never a shell/config expression.
+    if route.is_empty() || !route.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+        return Err(UnsafePath("invalid route identifier".into()));
+    }
+    let ssh = quote_path(&ossh.ssh)?;
+    let config = quote_path(config)?;
+    let mut text = String::from("# Explicit quoted jump route.\n");
+    for index in 0..=dest.jump.len() {
+        if index < dest.jump.len() {
+            let _ = writeln!(text, "Match tagged {route}-{index}");
+        } else {
+            let _ = writeln!(text, "Match !tagged {route}-*");
+        }
+        if index == 0 {
+            text.push_str("    ProxyCommand none\n");
+            continue;
+        }
+        let hop = &dest.jump[index - 1];
+        let _ = write!(text, "    ProxyCommand {ssh} -F {config} -P {route}-{} -W \"[%h]:%p\"", index - 1);
+        if let Some(user) = &hop.user {
+            let _ = write!(text, " -l \"{}\"", user.as_str());
+        }
+        if let Some(port) = hop.port {
+            let _ = write!(text, " -p {port}");
+        }
+        let _ = writeln!(text, " -- {}", hop.host.as_str());
+    }
+    text.push_str("Match all\n");
+    Ok(text)
 }
 
 fn pick(preferred: &[&str], extra: &[&str], supported: &[String]) -> String {
@@ -186,9 +227,54 @@ mod tests {
 
     #[test]
     fn unsafe_paths_are_refused() {
-        for bad in ["/a/%d", "/a/${HOME}", "/a/\"q", "/a/'q", "/a/\\b", "/a/\nb"] {
+        for bad in ["/a/%d", "/a/${HOME}", "/a/\"q", "/a/'q", "/a/\nb"] {
             assert!(quote_path(Path::new(bad)).is_err(), "{bad:?}");
         }
+        #[cfg(unix)]
+        assert!(quote_path(Path::new("/a/\\b")).is_err());
+        #[cfg(windows)]
+        assert_eq!(quote_path(Path::new(r"C:\Users\Some User\.ssh\id")).unwrap(), "\"C:/Users/Some User/.ssh/id\"");
         assert_eq!(quote_path(Path::new("/a b/c")).unwrap(), "\"/a b/c\"");
+    }
+    #[test]
+    fn explicit_route_quotes_paths_and_keeps_original_hop_names() {
+        let mut client = ossh();
+        client.ssh = "/opt/Program Files/OpenSSH/ssh.exe".into();
+        let dest = super::super::mux::Destination {
+            host: crate::validate::Host::parse("target.example").unwrap(),
+            user: None,
+            port: None,
+            jump: crate::validate::jump_chain("ops@first:2222,second").unwrap(),
+            identity_file: None,
+            auth: crate::profiles::AuthMethod::Auto,
+        };
+        let text = windows_route(&client, Path::new("/some user/run/session.conf"), &dest, "route").unwrap();
+        assert!(text.starts_with("# Explicit quoted jump route.\nMatch tagged route-0\n    ProxyCommand none\n"));
+        assert!(text.contains("Match tagged route-1\n    ProxyCommand \"/opt/Program Files/OpenSSH/ssh.exe\" -F \"/some user/run/session.conf\" -P route-0 -W \"[%h]:%p\" -l \"ops\" -p 2222 -- first\n"));
+        assert!(text.contains("Match !tagged route-*\n"));
+        assert!(text.ends_with(" -- second\nMatch all\n"));
+        assert!(windows_route(&client, Path::new("/safe"), &dest, "bad tag").is_err());
+        // Exercise OpenSSH's actual parser when tagged routing is supported.
+        if let Ok(system) = OpenSsh::discover()
+            && system.version >= (9, 4)
+        {
+            let dir = tempfile::tempdir().unwrap();
+            let file = dir.path().join("config with spaces");
+            let text = windows_route(&system, &file, &dest, "route").unwrap() + "Host *\n    BatchMode yes\n";
+            std::fs::write(&file, text).unwrap();
+            for (tag, expected) in [("route-0", ""), ("route-1", " -P route-0 "), ("unrelated", " -P route-1 ")] {
+                let output = std::process::Command::new(&system.ssh)
+                    .args(["-G", "-F"])
+                    .arg(&file)
+                    .args(["-P", tag, "--", "first"])
+                    .output()
+                    .unwrap();
+                assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+                if tag == "route-0" {
+                    assert!(!String::from_utf8_lossy(&output.stdout).lines().any(|line| line.starts_with("proxycommand ")));
+                }
+                assert!(String::from_utf8_lossy(&output.stdout).contains(expected), "{}", String::from_utf8_lossy(&output.stdout));
+            }
+        }
     }
 }

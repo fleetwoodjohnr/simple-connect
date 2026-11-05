@@ -40,6 +40,7 @@ impl Terminal {
     pub fn spawn(
         ssh: &Path,
         args: Vec<OsString>,
+        env: Vec<(String, String)>,
         cols: u16,
         rows: u16,
         mut on_output: impl FnMut(Vec<u8>) + Send + 'static,
@@ -48,6 +49,9 @@ impl Terminal {
         let pair = native_pty_system().openpty(size(cols, rows)).map_err(std::io::Error::other)?;
         let mut cmd = CommandBuilder::new(ssh);
         cmd.args(args);
+        for (key, value) in env {
+            cmd.env(key, value);
+        }
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         let child = pair.slave.spawn_command(cmd).map_err(std::io::Error::other)?;
@@ -127,6 +131,7 @@ mod tests {
         let term = Terminal::spawn(
             Path::new("/bin/sh"),
             vec!["-c".into(), "stty size; read x; echo got:$x".into()],
+            vec![],
             100,
             30,
             move |b| {

@@ -143,6 +143,15 @@ pub fn app_info(state: State<'_, AppState>) -> AppInfo {
     }
 }
 
+/// Rechecks native state after download, before an update can replace application files.
+#[tauri::command]
+pub fn prepare_update_install(state: State<'_, AppState>) -> CmdResult<()> {
+    if let Some(manager) = &state.manager {
+        manager.ensure_update_idle()?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn parse_quick_connect(input: String) -> CmdResult<QuickConnect> {
     if input.len() > 1024 {

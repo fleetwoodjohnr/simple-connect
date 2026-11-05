@@ -51,11 +51,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": [
-      "deb",
-      "rpm",
-      "appimage"
-    ],
+    "targets": "all",
     "category": "DeveloperTool",
     "shortDescription": "Secure SSH terminal and SFTP client",
     "icon": [
@@ -78,14 +74,17 @@
       }
     },
     "copyright": "Simple Connect contributors",
-    "longDescription": "A secure SSH terminal and SFTP client built on the system's OpenSSH, with host-key verification, encrypted credential storage, tunnels and jump hosts."
+    "longDescription": "A secure SSH terminal and SFTP client built on the system's OpenSSH, with host-key verification, encrypted credential storage, tunnels and jump hosts.",
+    "createUpdaterArtifacts": true
   },
   "plugins": {
     "updater": {
-      "pubkey": "REPLACE-WITH-THE-RELEASE-MINISIGN-PUBLIC-KEY (see BUILDING.md). Until then every update is rejected.",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUyQzNBQ0E1RTgwMDE5NTMKUldSVEdRRG9wYXpENHZ2UkhxdHQ1Ni8zdndkaXZNWXlaem13VnJKQjdBdC91VE8zbm5qaWNDRVcK",
       "endpoints": [
-        "https://updates.simpleconnect.invalid/{{target}}/{{arch}}/{{current_version}}"
-      ]
+        "https://github.com/fleetwoodjohnr/simple-connect/releases/latest/download/latest.json"
+      ],
+      "requireSignedVersion": true
     }
-  }
+  },
+  "version": "0.1.0"
 }

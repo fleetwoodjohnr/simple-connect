@@ -2,9 +2,10 @@
 //!
 //! `ssh` re-executes this application's binary as `SSH_ASKPASS` and as the
 //! `KnownHostsCommand`. In that mode [`run_if_helper`] forwards the request over a
-//! Unix socket in the private runtime directory and prints the answer. The server
-//! checks the peer's UID and a per-session random token that only that `ssh`
-//! process tree knows (it is passed through the child's environment).
+//! Unix socket in the private runtime directory, or a current-user-only named
+//! pipe on Windows, and prints the answer. Unix peers must have our UID; Windows
+//! pipes use an explicit protected DACL. Every request also needs a per-session
+//! random token known only to that `ssh` process tree (passed in its environment).
 //!
 //! Every failure path in the helper exits non-zero with no output, which makes
 //! `ssh` abort: host verification and prompts fail closed.
@@ -21,6 +22,12 @@ use tokio::sync::{mpsc, oneshot};
 use zeroize::Zeroizing;
 
 use super::known_hosts::OfferedKey;
+
+#[cfg(windows)]
+#[path = "windows_pipe.rs"]
+mod windows_pipe;
+#[cfg(windows)]
+pub(crate) use windows_pipe::{current_owner_sid, current_user_sid};
 
 pub const ENV_SOCK: &str = "SC_HELPER_SOCK";
 pub const ENV_TOKEN: &str = "SC_HELPER_TOKEN";
@@ -90,7 +97,10 @@ pub fn run_if_helper() -> Option<i32> {
 fn exchange(req: &Request) -> std::io::Result<i32> {
     use std::os::unix::net::UnixStream;
     let sock = std::env::var_os(ENV_SOCK).ok_or_else(|| std::io::Error::other("no helper socket"))?;
-    let mut stream = UnixStream::connect(sock)?;
+    exchange_stream(UnixStream::connect(sock)?, req)
+}
+
+fn exchange_stream(mut stream: impl Read + Write, req: &Request) -> std::io::Result<i32> {
     let mut line = serde_json::to_vec(req)?;
     line.push(b'\n');
     stream.write_all(&line)?;
@@ -115,10 +125,19 @@ fn exchange(req: &Request) -> std::io::Result<i32> {
     Ok(if resp.ok { 0 } else { 1 })
 }
 
-#[cfg(not(unix))]
-fn exchange(_req: &Request) -> std::io::Result<i32> {
-    // ponytail: named-pipe transport lands with the Windows port.
-    Err(std::io::Error::other("helper transport not implemented on this platform"))
+#[cfg(windows)]
+fn exchange(req: &Request) -> std::io::Result<i32> {
+    let pipe = std::env::var_os(ENV_SOCK).ok_or_else(|| std::io::Error::other("no helper pipe"))?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match std::fs::OpenOptions::new().read(true).write(true).open(&pipe) {
+            Ok(stream) => return exchange_stream(stream, req),
+            Err(e) if e.raw_os_error() == Some(231) && std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -215,16 +234,68 @@ pub async fn start(runtime_dir: &Path) -> std::io::Result<(HelperServer, mpsc::R
     Ok((server, rx))
 }
 
+#[cfg(windows)]
+pub async fn start(_runtime_dir: &Path) -> std::io::Result<(HelperServer, mpsc::Receiver<HelperEvent>)> {
+    // A random name plus FIRST_PIPE_INSTANCE prevents an existing pipe from
+    // impersonating this application's server. Every instance has the same DACL.
+    let sock_path = PathBuf::from(format!(r"\\.\pipe\simple-connect-{}-{}", std::process::id(), random_token()));
+    let mut listener = windows_pipe::create(&sock_path, true)?;
+    let server = HelperServer { sock_path, routes: Arc::default() };
+    let (tx, rx) = mpsc::channel(32);
+    let srv = server.clone();
+    tokio::spawn(async move {
+        let mut next_id = 0u64;
+        loop {
+            if let Err(e) = listener.connect().await {
+                tracing::warn!("helper pipe connection failed: {e}");
+                return;
+            }
+            // Keep at least one instance alive throughout the handoff, so another
+            // process cannot claim the name between client connections.
+            let next = match windows_pipe::create(&srv.sock_path, false) {
+                Ok(next) => next,
+                Err(e) => {
+                    tracing::warn!("helper pipe creation failed: {e}");
+                    return;
+                }
+            };
+            let stream = std::mem::replace(&mut listener, next);
+            next_id += 1;
+            let (srv, tx) = (srv.clone(), tx.clone());
+            tokio::spawn(async move {
+                if let Err(e) = handle_stream(stream, &srv, &tx, next_id).await {
+                    tracing::warn!("helper request rejected: {e}");
+                }
+            });
+        }
+    });
+    Ok((server, rx))
+}
+
 #[cfg(unix)]
 async fn handle(stream: tokio::net::UnixStream, srv: &HelperServer, tx: &mpsc::Sender<HelperEvent>, id: u64) -> std::io::Result<()> {
     let uid = stream.peer_cred()?.uid();
     if uid != rustix::process::getuid().as_raw() {
         return Err(std::io::Error::other("peer has a different uid"));
     }
-    let (read, mut write) = stream.into_split();
+    handle_stream(stream, srv, tx, id).await
+}
+
+async fn handle_stream(
+    stream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    srv: &HelperServer,
+    tx: &mpsc::Sender<HelperEvent>,
+    id: u64,
+) -> std::io::Result<()> {
+    let (read, mut write) = tokio::io::split(stream);
     let mut reader = tokio::io::BufReader::new(read.take(MAX_MESSAGE));
     let mut line = Zeroizing::new(String::new());
-    reader.read_line(&mut line).await?;
+    tokio::time::timeout(Duration::from_secs(5), reader.read_line(&mut line))
+        .await
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "helper header timed out"))??;
+    if !line.ends_with('\n') {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "incomplete or oversized helper request"));
+    }
     let req: Request = serde_json::from_str(&line)?;
 
     let deny = Response { ok: false, output: None };
@@ -283,9 +354,24 @@ mod tests {
         assert_ne!(a, b);
     }
 
-    #[cfg(unix)]
+    #[tokio::test]
+    async fn rejects_incomplete_and_oversized_requests_before_routing() {
+        for bytes in [b"{\"kind\":\"askpass\"}".to_vec(), vec![b'x'; MAX_MESSAGE as usize + 1]] {
+            let (mut client, server) = tokio::io::duplex(MAX_MESSAGE as usize + 2);
+            client.write_all(&bytes).await.unwrap();
+            client.shutdown().await.unwrap();
+            let srv = HelperServer { sock_path: PathBuf::new(), routes: Arc::default() };
+            let (tx, mut rx) = mpsc::channel(1);
+            let error = handle_stream(server, &srv, &tx, 1).await.unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+            assert!(rx.try_recv().is_err(), "unframed requests must not reach the app");
+        }
+    }
+
+    #[cfg(any(unix, windows))]
     #[tokio::test]
     async fn rejects_unknown_tokens_and_routes_known_ones() {
+        #[cfg(unix)]
         use tokio::net::UnixStream;
         let dir = tempfile::tempdir().unwrap();
         let (srv, mut rx) = start(dir.path()).await.unwrap();
@@ -293,7 +379,10 @@ mod tests {
         let token = env.iter().find(|(k, _)| k == ENV_TOKEN).unwrap().1.clone();
 
         async fn send(sock: &Path, req: &Request) -> Option<Response> {
+            #[cfg(unix)]
             let mut s = UnixStream::connect(sock).await.unwrap();
+            #[cfg(windows)]
+            let mut s = tokio::net::windows::named_pipe::ClientOptions::new().open(sock).unwrap();
             let mut line = serde_json::to_vec(req).unwrap();
             line.push(b'\n');
             s.write_all(&line).await.unwrap();

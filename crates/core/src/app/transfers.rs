@@ -100,6 +100,15 @@ impl Queue {
         self.with(|i| i.jobs.iter_mut().find(|j| j.id == id).map(f)).flatten()
     }
 
+    /// Update installation must refuse unknown state rather than assume an empty queue.
+    pub fn ensure_update_idle(&self) -> Result<(), AppError> {
+        let inner = self.inner.lock().map_err(|_| AppError::Invalid("Transfer state is unavailable.".into()))?;
+        if inner.jobs.iter().any(|j| matches!(j.state, JobState::Queued | JobState::Running | JobState::Paused | JobState::Conflict)) {
+            return Err(AppError::Invalid("Finish or cancel pending transfers before installing an update.".into()));
+        }
+        Ok(())
+    }
+
     pub fn snapshot(&self) -> Vec<JobView> {
         self.with(|i| {
             i.jobs

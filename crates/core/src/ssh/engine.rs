@@ -77,7 +77,7 @@ impl Engine {
             details,
         };
         let kh = self.app_known_hosts();
-        let cfg_text =
+        let mut cfg_text =
             config::render(&self.ossh, &ConfigPaths { helper_exe: &self.exe, app_known_hosts: &kh, home: self.home.as_deref() }, policy)
                 .map_err(|e| fail(e.to_string()))?;
 
@@ -87,8 +87,12 @@ impl Engine {
         let cfg_path = self.paths.runtime.join(format!("{id}.conf"));
         let sock = self.paths.runtime.join(format!("cm-{id}.sock"));
         let safe = |p: &Path| p.to_str().is_some_and(|s| s.bytes().all(|b| b.is_ascii_alphanumeric() || b"/._-".contains(&b)));
-        if !safe(&cfg_path) {
+        if !cfg!(windows) && !safe(&cfg_path) {
             return Err(fail(format!("The runtime directory path {} must not contain spaces or special characters.", cfg_path.display())));
+        }
+        if cfg!(windows) {
+            let route = config::windows_route(&self.ossh, &cfg_path, dest, &format!("sc-route-{id}")).map_err(|e| fail(e.to_string()))?;
+            cfg_text = route + &cfg_text;
         }
         crate::paths::write_private(&cfg_path, cfg_text.as_bytes()).map_err(|e| fail(e.to_string()))?;
 

@@ -107,7 +107,7 @@ fn entry_from(name: String, meta: &MetaData) -> Entry {
 /// One SFTP session riding on a master connection.
 pub struct RemoteFs {
     pub sftp: Sftp,
-    _child: Child,
+    _child: std::sync::Arc<tokio::sync::Mutex<Child>>,
     pub home: String,
 }
 
@@ -117,6 +117,7 @@ impl RemoteFs {
         args.extend(["-s".into(), "--".into(), dest.host.as_str().into(), "sftp".into()]);
         let mut child = Command::new(&ossh.ssh)
             .args(args)
+            .envs(master.env.clone())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -125,6 +126,21 @@ impl RemoteFs {
             .map_err(|e| SftpError::Start(e.to_string()))?;
         let (stdin, stdout) = (child.stdin.take(), child.stdout.take());
         let (Some(stdin), Some(stdout)) = (stdin, stdout) else { return Err(SftpError::Start("no pipes".into())) };
+        let child = std::sync::Arc::new(tokio::sync::Mutex::new(child));
+        let weak_child = std::sync::Arc::downgrade(&child);
+        let mut exited = master.exit_signal();
+        tokio::spawn(async move {
+            while !*exited.borrow() {
+                if exited.changed().await.is_err() {
+                    break;
+                }
+            }
+            if let Some(child) = weak_child.upgrade() {
+                let mut child = child.lock().await;
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+            }
+        });
         let sftp = Sftp::new(stdin, stdout, SftpOptions::default()).await.map_err(|e| SftpError::Start(e.to_string()))?;
         let home = sftp.fs().canonicalize(".").await?.to_string_lossy().into_owned();
         Ok(RemoteFs { sftp, _child: child, home })

@@ -68,6 +68,7 @@ async fn password_login_terminal_and_security_info() {
     let _term = Terminal::spawn(
         &h.engine.ossh.ssh,
         args,
+        master.env.clone(),
         120,
         40,
         move |b| drop(tx.send(b)),

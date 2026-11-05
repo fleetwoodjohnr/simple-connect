@@ -183,7 +183,8 @@ async fn full_session_lifecycle() {
     log.lock().unwrap().sudo_offer = None;
     m.terminal_write(&sid, &term, b"sudo -k; sudo true\n").unwrap();
     tokio::time::sleep(Duration::from_millis(1500)).await;
-    assert_eq!(log.lock().unwrap().sudo_offer, None, "no offer when disabled");
+    // A delayed withdrawal event from the preceding Ctrl+C is harmless.
+    assert!(!matches!(log.lock().unwrap().sudo_offer, Some((_, true))), "no visible offer when disabled");
     assert!(m.terminal_send_password(&sid, &term).is_err());
     m.terminal_write(&sid, &term, b"\x03").unwrap();
     m.set_settings(Settings { include_user_ssh_config: false, ..Settings::default() });
@@ -260,7 +261,23 @@ async fn full_session_lifecycle() {
     assert!(m.store().is_err());
     m.set_locked(false);
 
+    // An independent command must be cancelled when its owning session closes.
+    let command_manager = m.clone();
+    let command_session = sid.clone();
+    let command = tokio::spawn(async move {
+        command_manager.remote_exec(&command_session, "touch /tmp/sc-command-started; sleep 30".into(), Duration::from_secs(60)).await
+    });
+    let mut started = false;
+    for _ in 0..50 {
+        started = m.remote_exec(&sid, "test -f /tmp/sc-command-started".into(), Duration::from_secs(2)).await.unwrap().status.success();
+        if started {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(started, "remote command reached server before disconnect");
     m.disconnect(&sid).await.unwrap();
+    assert!(tokio::time::timeout(Duration::from_secs(2), command).await.expect("remote command must stop with session").unwrap().is_err());
     assert!(!banner(lport), "tunnels close with the session");
     let _ = Status::Connected;
 }

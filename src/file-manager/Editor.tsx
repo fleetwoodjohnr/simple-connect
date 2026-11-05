@@ -1,3 +1,4 @@
+import { useEditorDrafts } from "../updates/editor-drafts";
 import { useEffect, useRef, useState } from "react";
 import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers, highlightActiveLine, drawSelection } from "@codemirror/view";
@@ -105,6 +106,13 @@ export function Editor({ target, onClose }: { target: EditTarget | null; onClose
   const [dirty, setDirty] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
   const original = useRef("");
+  useEffect(() => {
+    if (!target) return;
+    const id = `${target.session}:${target.path}`;
+    useEditorDrafts.getState().mark(id, dirty);
+    return () => useEditorDrafts.getState().mark(id, false);
+  }, [target, dirty]);
+
 
   const save = async () => {
     if (!target || !view.current) return;

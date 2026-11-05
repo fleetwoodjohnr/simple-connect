@@ -3,6 +3,7 @@ import { api } from "../services/ipc";
 import type { Settings } from "../types/ipc";
 
 export const DEFAULT_SETTINGS: Settings = {
+  autoCheckUpdates: true,
   autoReconnect: true,
   includeUserSshConfig: true,
   keepaliveSecs: 30,
@@ -32,12 +33,14 @@ export const DEFAULT_SETTINGS: Settings = {
 
 interface SettingsState {
   settings: Settings;
+  loaded: boolean;
   load: () => Promise<void>;
   save: (patch: Partial<Settings>) => Promise<void>;
 }
 
 export const useSettings = create<SettingsState>((set, get) => ({
   settings: DEFAULT_SETTINGS,
-  load: async () => set({ settings: await api.getSettings() }),
+  loaded: false,
+  load: async () => set({ settings: await api.getSettings(), loaded: true }),
   save: async (patch) => set({ settings: await api.saveSettings({ ...get().settings, ...patch }) }),
 }));

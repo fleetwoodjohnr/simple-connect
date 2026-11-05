@@ -556,6 +556,18 @@ impl Manager {
         Ok(())
     }
 
+    /// Fail closed if a connection or unfinished transfer could lose work on restart.
+    pub fn ensure_update_idle(&self) -> Result<(), AppError> {
+        let sessions = self.sessions.lock().map_err(|_| AppError::Invalid("Connection state is unavailable.".into()))?;
+        if !sessions.is_empty() {
+            return Err(AppError::Invalid("Close connection tabs before installing an update.".into()));
+        }
+        self.transfers.ensure_update_idle()?;
+        // Existing disconnect paths have already closed child processes. Keep the
+        // idle helper alive so a failed installer leaves the application usable.
+        Ok(())
+    }
+
     pub async fn shutdown(&self) {
         let ids: Vec<String> = self.sessions.lock().map(|m| m.keys().cloned().collect()).unwrap_or_default();
         for id in ids {
@@ -766,7 +778,7 @@ impl Manager {
             sink(bytes);
         };
         let (me, sid, tid) = (Arc::downgrade(self), s.id.clone(), term_id.clone());
-        let term = Terminal::spawn(&self.engine.ossh.ssh, args, cols, rows, watched, move || {
+        let term = Terminal::spawn(&self.engine.ossh.ssh, args, master.env.clone(), cols, rows, watched, move || {
             if let Some(me) = me.upgrade() {
                 if let Ok(s) = me.session(&sid)
                     && let Ok(mut t) = s.terminals.lock()
@@ -865,9 +877,16 @@ impl Manager {
         let master = s.master().ok_or(AppError::NotConnected)?;
         let mut args = master.client_args(&s.req.dest);
         args.extend(["-T".into(), "--".into(), s.req.dest.host.as_str().into(), command.into()]);
-        let run =
-            tokio::process::Command::new(&self.engine.ossh.ssh).args(args).stdin(std::process::Stdio::null()).kill_on_drop(true).output();
-        Ok(tokio::time::timeout(timeout, run).await.map_err(|_| AppError::Invalid("The server took too long to respond.".into()))??)
+        let run = tokio::process::Command::new(&self.engine.ossh.ssh)
+            .args(args)
+            .envs(master.env.clone())
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output();
+        tokio::select! {
+            _ = master.closed() => Err(AppError::NotConnected),
+            result = tokio::time::timeout(timeout, run) => Ok(result.map_err(|_| AppError::Invalid("The server took too long to respond.".into()))??),
+        }
     }
 
     /// Server-side copy (`cp -R -p`); needs a POSIX server.

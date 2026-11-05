@@ -5,6 +5,7 @@
 
 const COMMANDS: &[&str] = &[
     "app_info",
+    "prepare_update_install",
     "parse_quick_connect",
     "get_settings",
     "save_settings",

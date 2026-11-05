@@ -1,6 +1,6 @@
 # Simple Connect
 
-A secure SSH terminal, SFTP and remote desktop client for Linux. It is built on your system's
+A secure SSH terminal, SFTP and remote desktop client for Linux, Windows and macOS. It is built on your system's
 OpenSSH, with a modern interface and secure defaults.
 
 ![Terminal](docs/screenshots/terminal.png)
@@ -49,9 +49,15 @@ ControlMaster connection. It implements no cryptography of its own. See
 
 ## Install
 
-Download the `.deb`, `.rpm` or AppImage from the releases page, or build it yourself
-([BUILDING.md](BUILDING.md)). You need the OpenSSH client (`openssh-clients` on Fedora,
+Download the Windows installer, macOS DMG, Linux `.deb`, `.rpm` or AppImage from
+[GitHub Releases](https://github.com/fleetwoodjohnr/simple-connect/releases), or build it yourself
+([BUILDING.md](BUILDING.md)). Windows installers include OpenSSH. On Linux you need the OpenSSH client (`openssh-clients` on Fedora,
 `openssh-client` on Debian/Ubuntu).
+
+Updates are checked at startup and daily. Settings → About lets you check manually,
+disable automatic checks, or install a signed update after closing active work. macOS
+builds use ad-hoc signatures and Windows builds may show unknown-publisher prompts;
+see the release notes for installation instructions.
 
 Works on GNOME, KDE Plasma, Cinnamon, XFCE, Hyprland and other desktops, on Wayland
 and X11. Saved passwords use any Secret Service keyring (GNOME Keyring, KWallet); where

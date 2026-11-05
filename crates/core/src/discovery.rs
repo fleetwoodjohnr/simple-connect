@@ -87,7 +87,17 @@ pub fn default_route_interface(route_table: &str) -> Option<String> {
 
 /// Networks that can be scanned right now.
 pub fn local_networks() -> Vec<LocalNetwork> {
+    #[cfg(target_os = "linux")]
     let default_iface = std::fs::read_to_string("/proc/net/route").ok().and_then(|t| default_route_interface(&t));
+    #[cfg(target_os = "macos")]
+    let default_iface = system_table("/sbin/route", &["-n", "get", "default"])
+        .and_then(|s| s.lines().find_map(|line| line.trim().strip_prefix("interface:").map(|name| name.trim().to_owned())));
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let default_iface: Option<String> = None;
+    #[cfg(windows)]
+    let default_index = windows_default_interface();
+    #[cfg(not(windows))]
+    let default_index: Option<u32> = None;
     let mut out: Vec<LocalNetwork> = if_addrs::get_if_addrs()
         .unwrap_or_default()
         .into_iter()
@@ -99,7 +109,7 @@ pub fn local_networks() -> Vec<LocalNetwork> {
             let hosts = targets(network, prefix, v4.ip).len() as u32;
             Some(LocalNetwork {
                 id: format!("{}/{}/{}", i.name, v4.ip, v4.prefixlen),
-                preferred: default_iface.as_deref() == Some(i.name.as_str()),
+                preferred: default_iface.as_deref() == Some(i.name.as_str()) || (default_index.is_some() && default_index == i.index),
                 interface: i.name,
                 address: v4.ip.to_string(),
                 cidr: format!("{attached}/{}", v4.prefixlen),
@@ -213,8 +223,103 @@ pub fn parse_arp(table: &str) -> BTreeMap<Ipv4Addr, String> {
 }
 
 fn neighbours() -> BTreeMap<Ipv4Addr, String> {
-    // ponytail: Linux only; macOS/Windows read their ARP caches with the ports.
-    std::fs::read_to_string("/proc/net/arp").map(|t| parse_arp(&t)).unwrap_or_default()
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_to_string("/proc/net/arp").map(|t| parse_arp(&t)).unwrap_or_default()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        system_table("/usr/sbin/arp", &["-an"]).map(|s| parse_native_arp(&s, true)).unwrap_or_default()
+    }
+    #[cfg(windows)]
+    {
+        system_table(&windows_system_program("arp.exe"), &["-a"]).map(|s| parse_native_arp(&s, false)).unwrap_or_default()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    BTreeMap::new()
+}
+
+/// Parse numeric ARP output without relying on localized column headings.
+#[cfg(any(target_os = "macos", windows, test))]
+fn parse_native_arp(table: &str, macos: bool) -> BTreeMap<Ipv4Addr, String> {
+    table
+        .lines()
+        .filter_map(|line| {
+            let fields: Vec<_> = line.split_whitespace().collect();
+            let (address, raw_mac) =
+                if macos { (fields.get(1)?.trim_matches(['(', ')']), *fields.get(3)?) } else { (*fields.first()?, *fields.get(1)?) };
+            let address = address.parse::<Ipv4Addr>().ok()?;
+            let octets: Option<Vec<u8>> = raw_mac
+                .split([':', '-'])
+                .map(|v| (!v.is_empty() && v.len() <= 2).then(|| u8::from_str_radix(v, 16).ok()).flatten())
+                .collect();
+            let octets = octets?;
+            if octets.len() != 6 || octets.iter().all(|b| *b == 0) || octets[0] & 1 != 0 {
+                return None;
+            }
+            Some((address, octets.iter().map(|v| format!("{v:02x}")).collect::<Vec<_>>().join(":")))
+        })
+        .collect()
+}
+
+/// OS utilities are queried with fixed arguments, capped output, and a deadline.
+/// Failure only removes optional route/MAC metadata; SSH scanning remains usable.
+#[cfg(any(target_os = "macos", windows))]
+fn system_table(program: impl AsRef<std::ffi::OsStr>, args: &[&str]) -> Option<String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::Instant;
+    let mut cmd = Command::new(program);
+    cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let mut child = cmd.spawn().ok()?;
+    let stdout = child.stdout.take()?;
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    const MAX_OUTPUT: u64 = 1024 * 1024;
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = stdout.take(MAX_OUTPUT + 1).read_to_end(&mut bytes);
+        let _ = tx.send((result, bytes));
+    });
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Err(_) => break None,
+            _ if Instant::now() >= deadline => break None,
+            _ => std::thread::sleep(Duration::from_millis(20)),
+        }
+    };
+    if status.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    let output = rx.recv_timeout(Duration::from_secs(1)).ok();
+    // Never block joining a reader if a utility unexpectedly inherited its pipe.
+    if reader.is_finished() {
+        let _ = reader.join();
+    }
+    let (result, bytes) = output?;
+    if !status?.success() || result.is_err() || bytes.len() > MAX_OUTPUT as usize {
+        return None;
+    }
+    String::from_utf8(bytes).ok()
+}
+
+#[cfg(windows)]
+fn windows_system_program(program: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into())).join("System32").join(program)
+}
+
+#[cfg(windows)]
+fn windows_default_interface() -> Option<u32> {
+    let shell = windows_system_program("WindowsPowerShell/v1.0/powershell.exe");
+    let script = "$ErrorActionPreference='Stop'; Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | Sort-Object { $_.RouteMetric + $_.InterfaceMetric } | Select-Object -First 1 -ExpandProperty InterfaceIndex";
+    system_table(shell, &["-NoProfile", "-NonInteractive", "-Command", script])?.trim().parse().ok()
 }
 
 async fn reverse_name(ip: Ipv4Addr) -> Option<String> {
@@ -331,6 +436,18 @@ mod tests {
         let t = parse_arp(arp);
         assert_eq!(t.len(), 1);
         assert_eq!(t[&ip("100.110.198.193")], "18:fd:74:69:74:29");
+    }
+
+    #[test]
+    fn parses_macos_and_windows_neighbours_without_localized_headers() {
+        let mac = "? (192.168.1.2) at a:b:c:d:e:f on en0 ifscope [ethernet]\n? (192.168.1.3) at (incomplete) on en0\n? (224.0.0.1) at 1:0:5e:0:0:1 on en0\n";
+        let parsed = parse_native_arp(mac, true);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[&ip("192.168.1.2")], "0a:0b:0c:0d:0e:0f");
+        let windows = "Interface: 192.168.1.42 --- 0x5\n  Internetadresse Physische Adresse Typ\n  192.168.1.2 18-FD-74-69-74-29 dynamisch\n  192.168.1.3 00-00-00-00-00-00 ungültig\n  255.255.255.255 ff-ff-ff-ff-ff-ff statisch\n";
+        let parsed = parse_native_arp(windows, false);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[&ip("192.168.1.2")], "18:fd:74:69:74:29");
     }
 
     #[test]

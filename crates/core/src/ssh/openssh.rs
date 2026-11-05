@@ -23,8 +23,12 @@ pub struct OpenSsh {
 
 impl OpenSsh {
     pub fn discover() -> Result<Self, SshError> {
-        let ssh = find_in_path("ssh").ok_or(SshError::OpenSshMissing)?;
-        let keygen = find_in_path("ssh-keygen").ok_or(SshError::OpenSshMissing)?;
+        let bundled = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("openssh")));
+        let locate = |name: &str| {
+            bundled.as_ref().map(|d| d.join(format!("{name}.exe"))).filter(|p| cfg!(windows) && p.is_file()).or_else(|| find_in_path(name))
+        };
+        let ssh = locate("ssh").ok_or(SshError::OpenSshMissing)?;
+        let keygen = locate("ssh-keygen").ok_or(SshError::OpenSshMissing)?;
         let out = Command::new(&ssh).arg("-V").output().map_err(|_| SshError::OpenSshMissing)?;
         let version_string = String::from_utf8_lossy(&out.stderr).trim().to_owned();
         let version = parse_version(&version_string).ok_or(SshError::OpenSshMissing)?;

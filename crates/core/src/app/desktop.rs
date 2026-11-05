@@ -385,6 +385,7 @@ impl Manager {
         args.extend(["-T".into(), "--".into(), s.req.dest.host.as_str().into(), cmd.into()]);
         let mut child = Command::new(&self.engine.ossh.ssh)
             .args(args)
+            .envs(master.env.clone())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -393,7 +394,11 @@ impl Manager {
             .map_err(|e| DesktopError::new("server", "OpenSSH could not be started.").with_details(e.to_string()))?;
         let stdout = child.stdout.take().ok_or_else(|| DesktopError::new("server", "OpenSSH could not be started."))?;
         let mut lines = BufReader::new(stdout).lines();
-        match tokio::time::timeout(Duration::from_secs(30), lines.next_line()).await {
+        let status = tokio::select! {
+            _ = master.closed() => return Err(not_connected()),
+            status = tokio::time::timeout(Duration::from_secs(30), lines.next_line()) => status,
+        };
+        match status {
             Ok(Ok(Some(line))) => Ok((desktop::parse_status(&line)?, Some(child))),
             Err(_) => Err(DesktopError::new("server", "The remote desktop server took too long to start.")),
             Ok(_) => {
@@ -429,6 +434,7 @@ impl Manager {
         let (master, mark, args) = self.forward_args(s, target)?;
         let mut child = Command::new(&self.engine.ossh.ssh)
             .args(args)
+            .envs(master.env.clone())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())

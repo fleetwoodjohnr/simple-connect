@@ -1,3 +1,6 @@
+import { isTauri } from "@tauri-apps/api/core";
+import { useUpdates, scheduleUpdateChecks } from "./updates/store";
+import { UpdateNotice } from "./updates/UpdateNotice";
 import { useEffect, useState } from "react";
 import { Tooltip } from "radix-ui";
 import { useThemeSync } from "./hooks/useThemeSync";
@@ -30,10 +33,10 @@ export default function App() {
   useThemeSync();
   const { setPaletteOpen, setEditing, view, setView } = useUi();
   const loadConnections = useConnections((s) => s.load);
-  const { settings, load: loadSettings } = useSettings();
+  const { settings, loaded, load: loadSettings } = useSettings();
   const { tabs, activeId, prompts, locked, setLocked, connect, close, addTerminal } = useSessions();
   const [info, setInfo] = useState<AppInfo | null>(null);
-  const [settingsPage, setSettingsPage] = useState<"General" | "SSH keys">("General");
+  const [settingsPage, setSettingsPage] = useState<"General" | "SSH keys" | "About">("General");
 
   useEffect(() => {
     void startEventBridge();
@@ -46,6 +49,12 @@ export default function App() {
     void api.listTransfers().then((jobs) => useSessions.setState({ jobs }), () => undefined);
   }, [loadConnections, loadSettings, setLocked]);
 
+  const updating = useUpdates((s) => s.state === "installing");
+  useEffect(() => {
+    if (!loaded || !settings.autoCheckUpdates || !import.meta.env.PROD || !isTauri()) return;
+    return scheduleUpdateChecks(() => void useUpdates.getState().checkNow());
+  }, [loaded, settings.autoCheckUpdates]);
+
   // Lock state changes (e.g. a lock password was just set) refresh what the UI offers.
   useEffect(() => {
     void api.appInfo().then(setInfo);
@@ -53,12 +62,12 @@ export default function App() {
 
   useIdleLock(settings.autoLockMinutes, !!info?.lockConfigured && !locked);
 
-  const openSettings = (page: "General" | "SSH keys" = "General") => {
+  const openSettings = (page: "General" | "SSH keys" | "About" = "General") => {
     setSettingsPage(page);
     setView("settings");
   };
 
-  useShortcuts({
+  useShortcuts(updating ? {} : {
     palette: () => setPaletteOpen(true),
     newConnection: () => setEditing({}),
     newTerminal: () => activeId && addTerminal(activeId),
@@ -73,12 +82,12 @@ export default function App() {
 
   return (
     <Tooltip.Provider delayDuration={400}>
-      <div className="flex h-full flex-col" inert={locked} aria-hidden={locked}>
+      <div className="flex h-full flex-col" inert={locked || updating} aria-hidden={locked || updating}>
         <TopBar canLock={!!info?.lockConfigured} />
         <div className="flex min-h-0 flex-1">
           {view === "settings" ? (
             <main className="min-w-0 flex-1">
-              <SettingsPage initial={settingsPage} />
+              <SettingsPage key={settingsPage} initial={settingsPage} />
             </main>
           ) : (
             <>
@@ -104,12 +113,16 @@ export default function App() {
         <TransferDrawer />
         <StatusBar />
       </div>
+      {!updating && <>
       <CommandPalette openSettings={openSettings} />
       <NetworkScanner />
       <ConnectionEditor />
       <HostKeyDialog prompt={prompt?.type === "hostKey" ? prompt : null} sessionLabel={promptLabel} />
       <SecretPromptDialog prompt={prompt?.type === "secret" ? prompt : null} sessionLabel={promptLabel} />
       <Notices />
+      </>}
+      {!locked && <UpdateNotice onReview={() => openSettings("About")} />}
+      {updating && <div className="fixed inset-0 z-50 flex items-center justify-center bg-canvas/90" role="status">Installing update…</div>}
       {locked && <LockScreen />}
     </Tooltip.Provider>
   );

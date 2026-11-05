@@ -75,6 +75,7 @@ impl Default for DesktopSettings {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
+    pub auto_check_updates: bool,
     pub auto_reconnect: bool,
     pub include_user_ssh_config: bool,
     pub keepalive_secs: u16,
@@ -101,6 +102,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            auto_check_updates: true,
             auto_reconnect: true,
             include_user_ssh_config: true,
             keepalive_secs: 30,
@@ -158,6 +160,15 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn existing_settings_enable_update_checks_by_default() {
+        let old: Settings = serde_json::from_str(r#"{"autoReconnect":false}"#).unwrap();
+        assert!(old.auto_check_updates);
+        assert!(!old.auto_reconnect);
+        let opted_out: Settings = serde_json::from_str(r#"{"autoCheckUpdates":false}"#).unwrap();
+        assert!(!opted_out.auto_check_updates);
+    }
 
     #[test]
     fn defaults_are_secure_and_values_are_clamped() {
