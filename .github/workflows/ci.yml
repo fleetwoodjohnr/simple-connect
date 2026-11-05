@@ -37,6 +37,9 @@ jobs:
       - run: cargo test --workspace --locked
       - run: npm audit --omit=dev --audit-level=high
   audit:
+    permissions:
+      contents: read
+      checks: write
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
