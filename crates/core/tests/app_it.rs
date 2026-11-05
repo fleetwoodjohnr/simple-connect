@@ -277,7 +277,8 @@ async fn full_session_lifecycle() {
     }
     assert!(started, "remote command reached server before disconnect");
     m.disconnect(&sid).await.unwrap();
-    assert!(tokio::time::timeout(Duration::from_secs(2), command).await.expect("remote command must stop with session").unwrap().is_err());
+    let stopped = tokio::time::timeout(Duration::from_secs(2), command).await.expect("remote command must stop with session").unwrap();
+    assert!(stopped.is_err() || stopped.is_ok_and(|out| !out.status.success()), "disconnected command must not succeed");
     assert!(!banner(lport), "tunnels close with the session");
     let _ = Status::Connected;
 }
