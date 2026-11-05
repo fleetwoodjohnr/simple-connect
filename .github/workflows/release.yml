@@ -29,8 +29,6 @@ jobs:
           - { os: macos-15-intel, target: x86_64-apple-darwin, platform: darwin, arch: x86_64 }
           - { os: macos-15, target: aarch64-apple-darwin, platform: darwin, arch: aarch64 }
     runs-on: ${{ matrix.os }}
-    env:
-      CARGO_BUILD_TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -41,6 +39,8 @@ jobs:
         with:
           targets: ${{ matrix.target }}
           components: clippy, rustfmt
+      - name: Verify native runner architecture
+        run: python -c "import subprocess; assert 'host: ${{ matrix.target }}' in subprocess.check_output(['rustc', '-vV'], text=True)"
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
@@ -61,13 +61,13 @@ jobs:
       - run: cargo test --workspace --locked
       - run: npm audit --omit=dev --audit-level=high
       - name: Build CI-only updater rehearsal example
-        run: cargo build -p simple-connect --example update_rehearsal --target ${{ matrix.target }} --locked
+        run: cargo build -p simple-connect --example update_rehearsal --locked
       - run: npm run tauri build -- --target ${{ matrix.target }} -- --locked
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       - name: Smoke test installed package
-        run: python scripts/package-smoke.py --bundle target/${{ matrix.target }}/release/bundle --arch ${{ matrix.arch }} --logs target/smoke-logs --harness-dir target/${{ matrix.target }}/debug/examples
+        run: python scripts/package-smoke.py --bundle target/${{ matrix.target }}/release/bundle --arch ${{ matrix.arch }} --logs target/smoke-logs --harness-dir target/debug/examples
       - uses: actions/upload-artifact@v4
         if: always()
         with:
