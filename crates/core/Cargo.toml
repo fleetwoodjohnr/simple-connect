@@ -6,6 +6,10 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+# Exercise Win32's independent-process SSH transport on Unix integration runners.
+independent-ssh = []
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true

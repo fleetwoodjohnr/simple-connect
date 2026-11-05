@@ -1,7 +1,6 @@
 //! Basic, unprivileged remote system information, gathered only on request.
 //! The command is a fixed string: no user input reaches the remote shell.
 
-use std::process::Stdio;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -62,15 +61,7 @@ pub fn parse(output: &str) -> SysInfo {
 }
 
 pub async fn gather(m: &Manager, session: &str) -> Result<SysInfo, AppError> {
-    let s = m.session(session)?;
-    let master = s.master().ok_or(AppError::NotConnected)?;
-    let mut args = master.client_args(&s.req.dest);
-    args.extend(["-T".into(), "--".into(), s.req.dest.host.as_str().into(), SCRIPT.into()]);
-    let child =
-        tokio::process::Command::new(&m.engine.ossh.ssh).args(args).stdin(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true).output();
-    let out = tokio::time::timeout(Duration::from_secs(10), child)
-        .await
-        .map_err(|_| AppError::Invalid("The server took too long to respond.".into()))??;
+    let out = m.remote_exec(session, SCRIPT.into(), Duration::from_secs(10)).await?;
     Ok(parse(&String::from_utf8_lossy(&out.stdout[..out.stdout.len().min(16 * 1024)])))
 }
 

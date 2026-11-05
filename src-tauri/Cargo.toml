@@ -15,7 +15,9 @@ simple-connect-core.workspace = true
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"
-tauri-plugin-updater = "2"
+# Only native v2 artifacts are published, so legacy v1 zip extraction is not
+# needed. Keep the archive parser out of the Windows updater entirely.
+tauri-plugin-updater = { version = "2.14.1", default-features = false, features = ["rustls-tls", "system-proxy"] }
 tauri-plugin-process = "2"
 serde.workspace = true
 serde_json.workspace = true

@@ -25,6 +25,9 @@ jobs:
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
       - run: npm ci
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/windows-openssh.ps1 -Architecture x86_64
       - run: node scripts/check-version.mjs
       - run: node --test scripts/release-manifest.node.mjs
       - run: npm test
@@ -33,14 +36,20 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked
       - run: cargo test --workspace --locked
       - run: npm audit --omit=dev --audit-level=high
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
   integration:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y podman
       - run: cargo test -p simple-connect-core --test ssh_it --test sftp_it --test app_it --test desktop_it --locked -- --ignored --test-threads=4
+      - run: cargo test -p simple-connect-core --features independent-ssh --test independent_it --locked -- --ignored

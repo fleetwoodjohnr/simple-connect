@@ -124,7 +124,21 @@ mod tests {
         let q = ok("ssh -J ops@bastion:22,jump2 db");
         assert_eq!(q.jump.len(), 2);
 
-        assert!(ok("-i /home/u/.ssh/id_ed25519 host").identity_file.is_some());
+        let identity = if cfg!(windows) { "C:/Users/u/.ssh/id_ed25519" } else { "/home/u/.ssh/id_ed25519" };
+        assert_eq!(ok(&format!("-i {identity} host")).identity_file, Some(PathBuf::from(identity)));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_identity_paths() {
+        for identity in [r"C:\Users\u\.ssh\id_ed25519", "C:/Users/u/.ssh/id_ed25519"] {
+            let q = ok(&format!("ssh -i {identity} deploy@example.com"));
+            assert_eq!(q.identity_file, Some(PathBuf::from(identity)));
+            assert_eq!(q.user.unwrap().as_str(), "deploy");
+        }
+        for identity in ["C:relative/key", r"C:relative\key", r"\Users\u\key", "C:/Users/../key", r"C:\Users\..\key"] {
+            assert!(matches!(parse(&format!("ssh -i {identity} host")), Err(QuickConnectError::Invalid(_))), "{identity:?}");
+        }
     }
 
     #[test]

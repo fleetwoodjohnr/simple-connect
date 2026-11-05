@@ -71,8 +71,26 @@ async fn open_local_part(path: &Path) -> std::io::Result<tokio::fs::File> {
         use std::os::unix::fs::OpenOptionsExt;
         opts.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32).mode(0o600);
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // Open the reparse point itself, never a symlink planted at .sc-part.
+        opts.custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT
+    }
     let path = path.to_path_buf();
-    let f = tokio::task::spawn_blocking(move || opts.open(path)).await.map_err(std::io::Error::other)??;
+    let f = tokio::task::spawn_blocking(move || {
+        let file = opts.open(path)?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if file.metadata()?.file_attributes() & 0x400 != 0 {
+                return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "Download partial file is a reparse point"));
+            }
+        }
+        Ok::<_, std::io::Error>(file)
+    })
+    .await
+    .map_err(std::io::Error::other)??;
     Ok(tokio::fs::File::from_std(f))
 }
 
@@ -246,7 +264,16 @@ pub async fn remote_sha256(
     let mut args = master.client_args(dest);
     args.extend(["-T".into(), "--".into(), dest.host.as_str().into()]);
     args.push(format!("sha256sum -- {}", crate::ssh::shell::quote(remote)).into());
-    let out = tokio::process::Command::new(&ossh.ssh).args(args).stdin(std::process::Stdio::null()).output().await.ok()?;
+    let run = tokio::process::Command::new(&ossh.ssh)
+        .args(args)
+        .envs(master.env.clone())
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let out = tokio::select! {
+        _ = master.closed() => return None,
+        out = tokio::time::timeout(std::time::Duration::from_secs(300), run) => out.ok()?.ok()?,
+    };
     let text = String::from_utf8_lossy(&out.stdout);
     let digest = text.split_whitespace().next()?;
     (out.status.success() && digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit())).then(|| digest.to_ascii_lowercase())
@@ -331,6 +358,19 @@ pub type Shared = Arc<Control>;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn partial_download_never_follows_a_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        let link = dir.path().join("download.sc-part");
+        std::fs::write(&target, b"unchanged").unwrap();
+        // Native runners are elevated and have SeCreateSymbolicLinkPrivilege.
+        std::os::windows::fs::symlink_file(&target, &link).unwrap();
+        assert!(open_local_part(&link).await.is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"unchanged");
+    }
 
     #[test]
     fn helpers() {

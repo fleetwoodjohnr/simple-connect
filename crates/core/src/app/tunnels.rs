@@ -82,7 +82,7 @@ pub struct Registry {
 
 async fn control(m: &Manager, s: &Session, op: &str, flag: &str, arg: &str) -> Result<(), String> {
     let master = s.master().ok_or("Not connected.")?;
-    if cfg!(windows) {
+    if cfg!(any(windows, feature = "independent-ssh")) {
         return master.forward(&m.engine.ossh, &s.req.dest, op, flag, arg).await;
     }
     let mut args = master.client_args(&s.req.dest);
@@ -119,7 +119,7 @@ impl Registry {
             map.entry(session.into()).or_default().push(t.clone());
         }
         self.emit(m, session);
-        if cfg!(windows) {
+        if cfg!(any(windows, feature = "independent-ssh")) {
             self.watch_forward(m, session, &t);
         }
         Ok(t)
@@ -155,7 +155,7 @@ impl Registry {
             };
             t.active = res.is_ok();
             t.error = res.err();
-            if cfg!(windows) && t.active {
+            if cfg!(any(windows, feature = "independent-ssh")) && t.active {
                 self.watch_forward(m, &s.id, &t);
             }
             updated.push(t);

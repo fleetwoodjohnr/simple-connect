@@ -1,0 +1,6 @@
+[advisories]
+# No private RSA operation is reachable: RDP constructs UsernamePassword and
+# explicitly selects NTLM (no KerberosConfig), TLS has no client authentication,
+# and SSH keys remain in external OpenSSH. See SECURITY.md for the evidence and
+# the changes that require reassessing this exception. Upstream has no fix.
+ignore = ["RUSTSEC-2023-0071"]

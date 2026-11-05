@@ -87,10 +87,10 @@ impl Engine {
         let cfg_path = self.paths.runtime.join(format!("{id}.conf"));
         let sock = self.paths.runtime.join(format!("cm-{id}.sock"));
         let safe = |p: &Path| p.to_str().is_some_and(|s| s.bytes().all(|b| b.is_ascii_alphanumeric() || b"/._-".contains(&b)));
-        if !cfg!(windows) && !safe(&cfg_path) {
+        if !cfg!(any(windows, feature = "independent-ssh")) && !safe(&cfg_path) {
             return Err(fail(format!("The runtime directory path {} must not contain spaces or special characters.", cfg_path.display())));
         }
-        if cfg!(windows) {
+        if cfg!(any(windows, feature = "independent-ssh")) {
             let route = config::windows_route(&self.ossh, &cfg_path, dest, &format!("sc-route-{id}")).map_err(|e| fail(e.to_string()))?;
             cfg_text = route + &cfg_text;
         }

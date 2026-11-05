@@ -41,7 +41,7 @@ impl Destination {
     }
 
     fn auth_args(&self, out: &mut Vec<OsString>) {
-        if !cfg!(windows) && !self.jump.is_empty() {
+        if !cfg!(any(windows, feature = "independent-ssh")) && !self.jump.is_empty() {
             let spec = self.jump.iter().map(JumpHop::to_spec).collect::<Vec<_>>().join(",");
             out.extend(["-J".into(), spec.into()]);
         }
@@ -170,7 +170,7 @@ pub async fn start(
     spec.dest.auth_args(&mut args);
     args.extend(["--".into(), spec.dest.host.as_str().into()]);
 
-    if cfg!(windows) {
+    if cfg!(any(windows, feature = "independent-ssh")) {
         args = vec!["-F".into(), spec.config.into(), "-N".into(), "-v".into()];
         spec.dest.target_args(&mut args);
         spec.dest.auth_args(&mut args);
@@ -234,7 +234,9 @@ pub async fn start(
 
     let mut exit_rx = exited.clone();
     loop {
-        if (!cfg!(windows) && spec.socket.exists()) || (cfg!(windows) && authenticated.load(std::sync::atomic::Ordering::Acquire)) {
+        if (!cfg!(any(windows, feature = "independent-ssh")) && spec.socket.exists())
+            || (cfg!(any(windows, feature = "independent-ssh")) && authenticated.load(std::sync::atomic::Ordering::Acquire))
+        {
             let info = info.lock().map(|i| i.clone()).unwrap_or_default();
             on_phase(Phase::Connected, &info);
             return Ok(Master {
@@ -304,7 +306,7 @@ impl Master {
     /// Arguments for a multiplexed client through this master (no re-authentication).
     pub fn client_args(&self, dest: &Destination) -> Vec<OsString> {
         let mut args: Vec<OsString> = vec!["-F".into(), self.config.clone().into(), "-S".into(), self.socket.clone().into()];
-        if cfg!(windows) {
+        if cfg!(any(windows, feature = "independent-ssh")) {
             args = vec!["-F".into(), self.config.clone().into()];
             dest.auth_args(&mut args);
         }
@@ -454,7 +456,7 @@ mod tests {
         dest.auth_args(&mut args);
         let args: Vec<String> = args.into_iter().map(|a| a.into_string().unwrap()).collect();
         let mut expected = vec!["-p", "2222", "-l", "deploy"];
-        if !cfg!(windows) {
+        if !cfg!(any(windows, feature = "independent-ssh")) {
             expected.extend(["-J", "ops@bastion:22"]);
         }
         expected.extend(["-i", "/home/u/.ssh/id_ed25519", "-o", "IdentitiesOnly=yes", "-o", "PreferredAuthentications=publickey"]);

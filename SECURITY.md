@@ -63,9 +63,12 @@ OpenSSH hold their own buffers. Treat a compromised user account as compromised.
 ## Updates
 
 The in-app updater accepts an update only over HTTPS and only if its minisign
-signature verifies against the public key built into the app. Until a release key is
-configured (see [BUILDING.md](BUILDING.md)), every update is rejected. Distribution
-packages (deb/rpm) should be updated through your package manager.
+signature verifies against the public key built into the app and its signed version
+matches the manifest. Automatic checks run at startup and daily, and can be disabled
+in Settings → About. Download/installation requires explicit action after closing
+sessions, unfinished transfers, and unsaved files. DEB/RPM updates use native package
+installation with administrator authorization. Signing credentials live in repository
+Actions secrets and an ignored private backup, never in version control.
 
 ## Security review (pre-release)
 
@@ -79,8 +82,29 @@ Reviewed against the threat model before 0.1.0:
 | Secrets | Not in argv (tested via `/proc`), not in SQLite, not in logs (redaction tests), not returned to the webview. Saved only after a successful sign-in; auto-filled only for OpenSSH's own password prompt. |
 | IPC | 76 commands, each in an explicit allow-list generated at build time; no shell/fs/http plugins; strict CSP without remote origins; every argument validated in Rust. Tauri's `freezePrototype` is disabled because xterm.js is incompatible with it. |
 | Imports | Size-limited, unknown fields rejected, every profile re-validated, security policy never imported; tampered database rows are skipped on read. |
-| Dependencies | `npm audit`: no findings. `cargo audit`: no vulnerabilities (after updating `time` and `plist`/`quick-xml`); two informational warnings remain in Tauri's GTK3 stack — `glib` `VariantStrIter` unsoundness (API not used here) and the unmaintained build-time `proc-macro-error`. Both audits run before each release. |
+| Dependencies | `npm audit`: no findings. `cargo audit` gates every release. The 0.1.0 preparation updated vulnerable cryptographic, TLS, root-certificate, and zlib dependencies, and removed unused legacy ZIP update extraction. One unreachable RSA advisory is documented below; informational upstream maintenance notices remain visible. |
 
 Known limitations: the first connection to a server is trust-on-first-use; a
 compromised webview could drive the UI (accept prompts, type into terminals); X11
-clipboard managers may retain copied text; Windows and macOS are not yet supported.
+clipboard managers may retain copied text; initial Windows installers have no Authenticode certificate and macOS uses ad-hoc signing without notarization.
+
+
+## RSA advisory exception
+
+`.cargo/audit.toml` ignores only [RUSTSEC-2023-0071](https://rustsec.org/advisories/RUSTSEC-2023-0071.html),
+the Marvin timing attack on RSA private-key operations. Upstream currently provides
+no patched release. The dependency enters through IronRDP's CredSSP stack; Simple
+Connect never constructs its smart-card credentials or performs RSA decryption:
+
+- `crates/core/src/desktop/rdp.rs` constructs only `Credentials::UsernamePassword`,
+  configures rustls with `with_no_client_auth`, and passes `None` for the Kerberos
+  configuration to `connect_finalize`.
+- IronRDP connector 0.10's `credssp.rs` maps that `None` configuration directly to
+  `ClientMode::Ntlm`. Its private RSA smart-card path requires
+  `Credentials::SmartCard`, which the app does not construct.
+- SSH/key generation uses external OpenSSH; no SSH private key is passed to the Rust
+  `rsa` dependency. Public certificate verification does not expose a private RSA key.
+
+Reassess this exception before adding smart-card authentication, Kerberos/PKU2U,
+client TLS certificates, or any Rust RSA decryption/signing. Keep all other advisories
+as release blockers. The exception does not disable informational audit output.

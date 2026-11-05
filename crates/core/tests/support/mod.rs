@@ -61,18 +61,7 @@ impl Sshd {
     }
 
     fn run(&self, publish: &str) {
-        podman(&[
-            "run",
-            "-d",
-            "--rm",
-            "--name",
-            &self.name,
-            "-p",
-            publish,
-            "-e",
-            &format!("AUTHORIZED_KEY={}", self.authorized_key),
-            self.image,
-        ]);
+        podman(&["run", "-d", "--name", &self.name, "-p", publish, "-e", &format!("AUTHORIZED_KEY={}", self.authorized_key), self.image]);
     }
 
     /// Ends every SSH connection but keeps the server and its other programs running.
@@ -168,6 +157,14 @@ pub struct Harness {
 pub async fn harness(script: Script) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let paths = AppPaths::under(dir.path());
+    start(paths, dir, script).await
+}
+
+/// Exercises explicitly quoted transport configuration paths on Unix runners.
+pub async fn harness_with_spaced_runtime(script: Script) -> Harness {
+    let dir = tempfile::tempdir().unwrap();
+    let mut paths = AppPaths::under(dir.path());
+    paths.runtime = dir.path().join("runtime with spaces");
     start(paths, dir, script).await
 }
 

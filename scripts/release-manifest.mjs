@@ -1,5 +1,5 @@
 import { createHash, createPublicKey, verify } from 'node:crypto';
-import { readFile, readdir, writeFile } from 'node:fs/promises';
+import { readFile, readdir, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -40,7 +40,9 @@ export async function manifest(root, tag, repository, pubkey) {
   for (const file of await files(root)) {
     const relative = path.relative(root, file).split(path.sep);
     const target = relative[0];
-    const name = path.basename(file);
+    const originalName = path.basename(file);
+    const name = originalName.startsWith(`${target}-`) ? originalName : `${target}-${originalName}`;
+    const normalizedPath = path.join(path.dirname(file), name);
     const type = name.endsWith('.app.tar.gz') ? 'app' : name.endsWith('.AppImage') ? 'appimage' : name.endsWith('.deb') ? 'deb' : name.endsWith('.rpm') ? 'rpm' : name.endsWith('-setup.exe') ? 'nsis' : null;
     const diskImage = name.endsWith('.dmg');
     if (!type && !diskImage) continue;
@@ -51,10 +53,15 @@ export async function manifest(root, tag, repository, pubkey) {
     if (diskImage) {
       if (!/^darwin-(x86_64|aarch64)$/.test(target) || diskImages.has(target)) throw new Error(`Invalid or duplicate DMG target: ${target}`);
       diskImages.add(target);
+      if (file !== normalizedPath) await rename(file, normalizedPath);
       continue;
     }
     const signature = (await readFile(`${file}.sig`, 'utf8')).trim();
     verifyArtifact(bytes, signature, pubkey, tag.slice(1));
+    if (file !== normalizedPath) {
+      await rename(file, normalizedPath);
+      await rename(`${file}.sig`, `${normalizedPath}.sig`);
+    }
     const key = `${target}-${type}`;
     if (platforms[key]) throw new Error(`Duplicate target: ${key}`);
     platforms[key] = { signature, url: `https://github.com/${repository}/releases/download/${tag}/${encodeURIComponent(name)}` };

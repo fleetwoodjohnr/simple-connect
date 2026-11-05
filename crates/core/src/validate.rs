@@ -268,15 +268,39 @@ pub fn remote_path(input: &str) -> Result<&str> {
     Ok(input)
 }
 
+/// Windows interprets these characters and DOS device stems specially, even
+/// inside an otherwise ordinary directory. Kept portable so tests on Unix also
+/// exercise names that could address a device or an NTFS alternate data stream.
+fn windows_file_name(input: &str) -> bool {
+    if input.ends_with(['.', ' '])
+        || input.chars().any(|c| c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'))
+    {
+        return false;
+    }
+    let stem = input.split('.').next().unwrap_or("").trim_end_matches(' ').to_ascii_uppercase();
+    if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$") {
+        return false;
+    }
+    for prefix in ["COM", "LPT"] {
+        if let Some(number) = stem.strip_prefix(prefix)
+            && matches!(number, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³")
+        {
+            return false;
+        }
+    }
+    true
+}
+
 /// A single path component, e.g. a name from a remote directory listing that is
 /// about to be joined onto a local directory. Rejects separators, `.`/`..` and NUL.
+/// Windows also rejects DOS devices, alternate data streams and names that Win32 normalizes.
 pub fn file_name(input: &str) -> Result<&str> {
     let ok = !input.is_empty()
         && input.len() <= 255
         && input != "."
         && input != ".."
         && !input.contains(['/', '\0'])
-        && !(cfg!(windows) && input.contains('\\'));
+        && (!cfg!(windows) || windows_file_name(input));
     if ok { Ok(input) } else { Err(ValidationError::InvalidFileName(input.escape_debug().to_string())) }
 }
 
@@ -352,12 +376,73 @@ mod tests {
 
     #[test]
     fn local_paths() {
-        assert!(local_path("/home/u/file name ünï 'q'.txt").is_ok());
+        let absolute = if cfg!(windows) { "C:/Users/u/file name ünï 'q'.txt" } else { "/home/u/file name ünï 'q'.txt" };
+        assert!(local_path(absolute).is_ok());
         for bad in ["", "relative/x", "/a/../b", "/a\0b"] {
             assert!(local_path(bad).is_err(), "{bad:?}");
         }
         assert!(identity_file("~/.ssh/id_ed25519").is_ok());
         for bad in ["/k/%d", "/k/\"q", "/k/a\nb", "rel"] {
+            assert!(identity_file(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn windows_remote_names_are_safe_single_components() {
+        for bad in [
+            "file:secret",
+            "file::$DATA",
+            "NUL",
+            "nul.txt",
+            "Con",
+            "CON.txt",
+            "CON .txt",
+            "PRN",
+            "AUX",
+            "COM1",
+            "com9.log",
+            "LPT1.txt",
+            "lpt9",
+            "COM¹",
+            "LPT².txt",
+            "CONIN$",
+            "CONOUT$",
+            "trailing.",
+            "trailing ",
+            "a<b",
+            "a>b",
+            "a:b",
+            "a\"b",
+            "a|b",
+            "a?b",
+            "a*b",
+            "a\\b",
+            "a\nb",
+            "a\tb",
+            "a\u{7f}b",
+        ] {
+            assert!(!windows_file_name(bad), "{bad:?}");
+            if cfg!(windows) {
+                assert!(file_name(bad).is_err(), "{bad:?}");
+                assert!(join_local(Path::new("C:/Downloads"), bad).is_err(), "{bad:?}");
+            } else {
+                assert!(file_name(bad).is_ok(), "POSIX names must remain unchanged: {bad:?}");
+            }
+        }
+        for good in ["report.txt", "name with spaces.txt", "café", "COM10", "LPT10", "NUL-file", ".hidden"] {
+            assert!(windows_file_name(good), "{good:?}");
+            assert!(file_name(good).is_ok(), "{good:?}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_local_paths_and_identity_files() {
+        for good in [r"C:\Users\u\.ssh\id_ed25519", "C:/Users/u/.ssh/id_ed25519", r"\\server\share\key"] {
+            assert_eq!(identity_file(good).unwrap(), PathBuf::from(good));
+        }
+        for bad in [r"C:relative\key", "C:relative/key", r"\Users\u\key", "/Users/u/key", r"C:\Users\..\key", "C:/Users/../key"] {
+            assert!(local_path(bad).is_err(), "{bad:?}");
             assert!(identity_file(bad).is_err(), "{bad:?}");
         }
     }
@@ -374,8 +459,11 @@ mod tests {
 
     #[test]
     fn remote_names() {
-        assert!(file_name("ok name; $(rm -rf ~) 'q' \"d\".txt").is_ok());
-        assert!(file_name("new\nline").is_ok(), "newlines are legal on POSIX; UI must render them visibly");
+        assert!(file_name("ordinary name.txt").is_ok());
+        if !cfg!(windows) {
+            assert!(file_name("ok name; $(rm -rf ~) 'q' \"d\".txt").is_ok());
+            assert!(file_name("new\nline").is_ok(), "newlines are legal on POSIX; UI must render them visibly");
+        }
         for bad in ["", ".", "..", "../x", "a/b", "/etc/passwd", "a\0b"] {
             assert!(file_name(bad).is_err(), "{bad:?}");
         }
