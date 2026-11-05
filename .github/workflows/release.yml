@@ -40,7 +40,8 @@ jobs:
           targets: ${{ matrix.target }}
           components: clippy, rustfmt
       - name: Verify native runner architecture
-        run: python -c "import subprocess; assert 'host: ${{ matrix.target }}' in subprocess.check_output(['rustc', '-vV'], text=True)"
+        run: |
+          python -c "import subprocess; assert 'host: ${{ matrix.target }}' in subprocess.check_output(['rustc', '-vV'], text=True)"
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
