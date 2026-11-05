@@ -94,6 +94,47 @@ def digest(path):
     return checksum.hexdigest()
 
 
+def installed_resource_hashes(directory):
+    # NSIS regenerates the uninstaller; its bytes need not match the first run.
+    return {str(file.relative_to(directory)): digest(file)
+            for file in directory.rglob('*') if file.is_file() and file.name.lower() != 'uninstall.exe'}
+
+
+def wait_installed_resources(directory, expected, *, timeout=180, stable_seconds=2):
+    """The updater exits before NSIS; do not race its remaining resource writes."""
+    deadline = time.monotonic() + timeout
+    stable_since = None
+    while time.monotonic() < deadline:
+        try:
+            matches = (directory / 'uninstall.exe').is_file() and all(
+                digest(directory / relative) == checksum for relative, checksum in expected.items())
+        except (FileNotFoundError, PermissionError):
+            matches = False
+        if matches:
+            if stable_since is None:
+                stable_since = time.monotonic()
+            if time.monotonic() - stable_since >= stable_seconds:
+                return
+        else:
+            stable_since = None
+        time.sleep(0.2)
+    raise RuntimeError('NSIS update did not finish restoring the executable and bundled resources')
+
+
+def wait_uninstalled(paths, *, timeout=180):
+    """Wait for NSIS's self-copy child, not just its short-lived launcher."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            if all(not path.exists() for path in paths):
+                return
+        except PermissionError:
+            pass
+        time.sleep(0.2)
+    remaining = ', '.join(str(path) for path in paths if path.exists())
+    raise RuntimeError(f'NSIS uninstall did not complete; files remain: {remaining}')
+
+
 @contextmanager
 def update_fixture(artifact, target):
     signature = Path(f'{artifact}.sig').read_text().strip()
@@ -148,6 +189,7 @@ def rehearse_update(harness, installed, artifact, target, profile, logs, *, inst
     sentinel.write_text('isolated application data survives 0.0.9 -> candidate')
     sentinel_hash = digest(sentinel)
     expected_hash = digest(installed)
+    windows_resources = installed_resource_hashes(installed.parent) if os.name == 'nt' else None
     if sys.platform == 'linux':
         # A distinct installed old AppImage, never the distributable candidate.
         # Its old app version is provided by the native example context below.
@@ -185,6 +227,8 @@ def rehearse_update(harness, installed, artifact, target, profile, logs, *, inst
             time.sleep(0.2)
         else:
             raise RuntimeError('Native updater did not restore the signed candidate executable/image')
+    if windows_resources is not None:
+        wait_installed_resources(installed.parent, windows_resources)
     if digest(sentinel) != sentinel_hash:
         raise RuntimeError('Application data changed during native update')
     if installed_app:
@@ -225,8 +269,14 @@ def windows(bundle, arch, work, logs, harness):
     launch([executable], work / 'profile', logs)
     rehearse_update(harness, executable, installer, f'windows-{arch}-nsis', work / 'profile', logs)
     uninstaller = destination / 'uninstall.exe'
-    if uninstaller.exists():
-        run([uninstaller, '/S'], logs / 'uninstall.log', timeout=120)
+    if not uninstaller.is_file():
+        raise RuntimeError('NSIS did not install its uninstaller')
+    installed_files = [file for file in destination.rglob('*') if file.is_file()]
+    run([uninstaller, '/S'], logs / 'uninstall.log', timeout=120)
+    # /S's initial process self-copies and returns while another process still
+    # owns uninstall.exe. TemporaryDirectory cleanup must wait for that child.
+    wait_uninstalled(installed_files)
+    print('NSIS uninstall removed application, uninstaller, and bundled resources', flush=True)
 
 
 def macos(bundle, arch, work, logs, harness):
