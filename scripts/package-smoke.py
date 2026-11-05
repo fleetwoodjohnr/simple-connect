@@ -236,7 +236,47 @@ def rehearse_update(harness, installed, artifact, target, profile, logs, *, inst
     print(f'Native {target} updater rejected tampering, installed candidate, and preserved data', flush=True)
 
 
+def verify_windows_manifest(binary, log):
+    """Read the example's embedded manifest without executing its imports."""
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.LoadLibraryExW.argtypes = [wintypes.LPCWSTR, wintypes.HANDLE, wintypes.DWORD]
+    kernel.LoadLibraryExW.restype = wintypes.HMODULE
+    kernel.FindResourceW.argtypes = [wintypes.HMODULE, ctypes.c_void_p, ctypes.c_void_p]
+    kernel.FindResourceW.restype = wintypes.HANDLE
+    kernel.SizeofResource.argtypes = [wintypes.HMODULE, wintypes.HANDLE]
+    kernel.SizeofResource.restype = wintypes.DWORD
+    kernel.LoadResource.argtypes = [wintypes.HMODULE, wintypes.HANDLE]
+    kernel.LoadResource.restype = wintypes.HANDLE
+    kernel.LockResource.argtypes = [wintypes.HANDLE]
+    kernel.LockResource.restype = ctypes.c_void_p
+    kernel.FreeLibrary.argtypes = [wintypes.HMODULE]
+    kernel.FreeLibrary.restype = wintypes.BOOL
+    # LOAD_LIBRARY_AS_DATAFILE avoids executing DllMain or resolving imports.
+    module = kernel.LoadLibraryExW(str(binary), None, 2)
+    if not module:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        # Executable manifest resource: ID 1, RT_MANIFEST (24).
+        resource = kernel.FindResourceW(module, ctypes.c_void_p(1), ctypes.c_void_p(24))
+        if not resource:
+            raise RuntimeError('CI updater example has no embedded application manifest')
+        size = kernel.SizeofResource(module, resource)
+        loaded = kernel.LoadResource(module, resource)
+        pointer = kernel.LockResource(loaded) if loaded else None
+        if not pointer or not size:
+            raise RuntimeError('Could not read updater example application manifest')
+        manifest = ctypes.string_at(pointer, size)
+        log.write_bytes(manifest)
+        if b'Microsoft.Windows.Common-Controls' not in manifest or b'version="6.0.0.0"' not in manifest:
+            raise RuntimeError('Updater example must activate Common Controls v6')
+    finally:
+        kernel.FreeLibrary(module)
+
+
 def windows(bundle, arch, work, logs, harness):
+    verify_windows_manifest(harness, logs / 'updater-example.manifest')
     installer = one(bundle, '*-setup.exe')
     destination = work / 'installed'
     # NSIS /D is the final argument and is intentionally unquoted. CI temp roots
@@ -339,7 +379,7 @@ def main():
     args.logs = args.logs.resolve()
     # macOS's default temporary path is too long for Unix domain sockets.
     with tempfile.TemporaryDirectory(prefix='sc-smoke-', dir='/tmp' if sys.platform == 'darwin' else None) as temporary:
-        work = Path(temporary)
+        work = Path(temporary).resolve()
         handler = windows if sys.platform == 'win32' else macos if sys.platform == 'darwin' else linux
         harness = args.harness_dir.resolve() / ('update_rehearsal.exe' if os.name == 'nt' else 'update_rehearsal')
         if not harness.is_file():

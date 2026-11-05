@@ -122,4 +122,15 @@ fn main() {
 
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)))
         .expect("failed to run tauri-build");
+
+    // tauri-winres/embed-resource links Tauri's manifest only into binary
+    // targets. The CI updater example also links Wry's TaskDialogIndirect and
+    // therefore needs the same Common Controls v6 activation context before
+    // Windows resolves imports. Reuse Tauri's generated resource for examples
+    // only; do not duplicate or change the shipped application's resource.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        let resource = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo OUT_DIR")).join("resource.lib");
+        assert!(resource.is_file(), "tauri-build did not generate the Windows application resource");
+        println!("cargo:rustc-link-arg-examples={}", resource.display());
+    }
 }
