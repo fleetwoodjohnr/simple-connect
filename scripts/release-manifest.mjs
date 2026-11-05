@@ -41,7 +41,9 @@ export async function manifest(root, tag, repository, pubkey) {
     const relative = path.relative(root, file).split(path.sep);
     const target = relative[0];
     const originalName = path.basename(file);
-    const name = originalName.startsWith(`${target}-`) ? originalName : `${target}-${originalName}`;
+    // GitHub replaces spaces with dots when accepting release assets. Normalize
+    // before generating URLs and checksums so they match the uploaded names.
+    const name = (originalName.startsWith(`${target}-`) ? originalName : `${target}-${originalName}`).replaceAll(' ', '.');
     const normalizedPath = path.join(path.dirname(file), name);
     const type = name.endsWith('.app.tar.gz') ? 'app' : name.endsWith('.AppImage') ? 'appimage' : name.endsWith('.deb') ? 'deb' : name.endsWith('.rpm') ? 'rpm' : name.endsWith('-setup.exe') ? 'nsis' : null;
     const diskImage = name.endsWith('.dmg');

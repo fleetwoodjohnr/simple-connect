@@ -32,7 +32,7 @@ test('manifest requires every architecture and bundle, with versioned URLs', asy
         const dir = path.join(root, `${osName}-${arch}`);
         await mkdir(dir, { recursive: true });
         for (const ext of types) {
-          const file = path.join(dir, `app-${osName}-${arch}${ext === '-setup.exe' ? '' : '.'}${ext}`);
+          const file = path.join(dir, `Simple Connect-${osName}-${arch}${ext === '-setup.exe' ? '' : '.'}${ext}`);
           const bytes = Buffer.from(file);
           await writeFile(file, bytes);
           await writeFile(`${file}.sig`, signature(bytes));
@@ -46,6 +46,11 @@ test('manifest requires every architecture and bundle, with versioned URLs', asy
     assert.equal(Object.keys(m.platforms).length, 10);
     assert.match(await readFile(path.join(root, 'SHA256SUMS'), 'utf8'), /app-aarch64\.dmg/);
     assert.match(m.platforms['windows-aarch64-nsis'].url, /releases\/download\/v0.1.0\//);
+    for (const entry of Object.values(m.platforms)) {
+      assert.match(entry.url, /Simple\.Connect/);
+      assert.doesNotMatch(entry.url, /%20/);
+    }
+    assert.equal(await readFile(path.join(root, 'windows-aarch64', 'windows-aarch64-Simple.Connect-windows-aarch64-setup.exe'), 'utf8'), path.join(root, 'windows-aarch64', 'Simple Connect-windows-aarch64-setup.exe'));
     await assert.rejects(manifest(root, 'untrusted tag', 'owner/repo', pub));
   } finally { await rm(root, { recursive: true, force: true }); }
 });
