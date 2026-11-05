@@ -23,13 +23,47 @@ import time
 
 def run(args, log, *, cwd=None, env=None, timeout=120):
     print('Running:', ' '.join(map(str, args)), flush=True)
-    result = subprocess.run(list(map(str, args)), cwd=cwd, env=env, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, timeout=timeout)
+    # A ShellExecute/NSIS descendant can inherit a PIPE after the example exits.
+    # On Windows subprocess.run's timeout then performs an unbounded final
+    # communicate() waiting for EOF. A regular log file has no pipe-reader join.
     with log.open('ab') as output:
-        output.write(result.stdout)
-    if result.returncode:
-        raise RuntimeError(f'{args[0]} exited {result.returncode}; see {log}')
-    return result.stdout.decode(errors='replace')
+        start = output.tell()
+        process = subprocess.Popen(list(map(str, args)), cwd=cwd, env=env, stdout=output,
+                                   stderr=subprocess.STDOUT, start_new_session=os.name != 'nt')
+        try:
+            code = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            output.write(f'\nCommand timed out after {timeout}s; terminating process tree\n'.encode())
+            output.flush()
+            if os.name == 'nt':
+                killer = subprocess.Popen(['taskkill', '/PID', str(process.pid), '/T', '/F'],
+                                          stdout=output, stderr=subprocess.STDOUT)
+                try:
+                    killer.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    killer.kill()
+                    killer.wait(timeout=5)
+            else:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            if process.poll() is None:
+                process.kill()
+            try:
+                process.wait(timeout=15)
+            except subprocess.TimeoutExpired as stopped:
+                raise RuntimeError(f'Could not stop timed-out command; see {log}') from stopped
+            raise RuntimeError(f'{args[0]} timed out after {timeout}s; see {log}') from error
+        output.flush()
+        # Bound the read to bytes already written. Descendants may still append
+        # diagnostics while their installer completion is checked separately.
+        end = os.fstat(output.fileno()).st_size
+    if code:
+        raise RuntimeError(f'{args[0]} exited {code}; see {log}')
+    with log.open('rb') as captured:
+        captured.seek(start)
+        return captured.read(max(0, end - start)).decode(errors='replace')
 
 
 def one(bundle, pattern):
