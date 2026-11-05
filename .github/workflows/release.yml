@@ -29,6 +29,8 @@ jobs:
           - { os: macos-15-intel, target: x86_64-apple-darwin, platform: darwin, arch: x86_64 }
           - { os: macos-15, target: aarch64-apple-darwin, platform: darwin, arch: aarch64 }
     runs-on: ${{ matrix.os }}
+    env:
+      CARGO_BUILD_TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
