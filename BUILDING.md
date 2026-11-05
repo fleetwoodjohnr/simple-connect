@@ -82,8 +82,10 @@ only client executables, libraries, and notices. Never install the upstream SSH 
 service as part of application packaging.
 
 Updater signing is enabled. The public key is committed in tauri.conf.json. The matching
-private key backup is in the ignored `.release-keys/` directory on the release machine;
-keep an additional offline backup. Do not delete or rotate this key casually: installed
+private key is in the ignored `.release-keys/` directory on the release machine. An
+independent backup is stored at `/home/jrf/.local/share/simple-connect-release/` on that
+machine, with owner-only directory and file permissions; also keep an offline backup.
+Do not delete or rotate this key casually: installed
 clients trust it. GitHub Actions uses `TAURI_SIGNING_PRIVATE_KEY` and
 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secrets. Never expose them to pull-request jobs.
 
